@@ -14,6 +14,7 @@ use crate::vector_store::VectorStore;
 #[derive(Clone, serde::Serialize)]
 pub struct ExtractionStatus {
     pub is_extracting: bool,
+    pub is_paused: bool,
     pub total_files: u64,
     pub processed_files: u64,
     pub failed_files: u64,
@@ -23,6 +24,7 @@ pub struct ExtractionStatus {
 #[derive(Clone)]
 pub struct ExtractionState {
     pub is_extracting: Arc<AtomicBool>,
+    pub is_paused: Arc<AtomicBool>,
     pub total_files: Arc<AtomicU64>,
     pub processed_files: Arc<AtomicU64>,
     pub failed_files: Arc<AtomicU64>,
@@ -33,6 +35,7 @@ impl ExtractionState {
     pub fn new() -> Self {
         Self {
             is_extracting: Arc::new(AtomicBool::new(false)),
+            is_paused: Arc::new(AtomicBool::new(false)),
             total_files: Arc::new(AtomicU64::new(0)),
             processed_files: Arc::new(AtomicU64::new(0)),
             failed_files: Arc::new(AtomicU64::new(0)),
@@ -44,6 +47,7 @@ impl ExtractionState {
 pub fn get_extraction_status(state: &ExtractionState) -> ExtractionStatus {
     ExtractionStatus {
         is_extracting: state.is_extracting.load(Ordering::Relaxed),
+        is_paused: state.is_paused.load(Ordering::Relaxed),
         total_files: state.total_files.load(Ordering::Relaxed),
         processed_files: state.processed_files.load(Ordering::Relaxed),
         failed_files: state.failed_files.load(Ordering::Relaxed),
@@ -60,8 +64,13 @@ struct FileToProcess {
 
 pub fn start_extraction(app: AppHandle, state: ExtractionState, vector_store: Arc<VectorStore>) {
     if state.is_extracting.swap(true, Ordering::SeqCst) {
-        return; // Already running
+        // If already running, ensure it's not paused? Or just let it be?
+        // Let's unpause if start is called again, or just return.
+        // If user clicks start while paused, maybe we should resume?
+        // For now, standard behavior: if running, do nothing. User should use resume.
+        return;
     }
+    state.is_paused.store(false, Ordering::SeqCst);
     state.total_files.store(0, Ordering::SeqCst);
     state.processed_files.store(0, Ordering::SeqCst);
     state.failed_files.store(0, Ordering::SeqCst);
@@ -108,6 +117,19 @@ pub fn start_extraction(app: AppHandle, state: ExtractionState, vector_store: Ar
 
         // Process in batches of 20
         for batch in files.chunks(20) {
+            // Check stop signal
+            if !state.is_extracting.load(Ordering::SeqCst) {
+                break;
+            }
+
+            // Check pause signal
+            while state.is_paused.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                // If stopped while paused
+                if !state.is_extracting.load(Ordering::SeqCst) {
+                    break;
+                }
+            }
             if !state.is_extracting.load(Ordering::SeqCst) {
                 break;
             }
@@ -158,6 +180,13 @@ pub fn start_extraction(app: AppHandle, state: ExtractionState, vector_store: Ar
             for f in batch {
                 if !state.is_extracting.load(Ordering::SeqCst) {
                     break;
+                }
+                // Check pause inside inner loop too for better responsiveness
+                while state.is_paused.load(Ordering::SeqCst) {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    if !state.is_extracting.load(Ordering::SeqCst) {
+                        break;
+                    }
                 }
 
                 *state.current_file.lock().unwrap() = f.path.clone();

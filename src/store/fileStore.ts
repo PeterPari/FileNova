@@ -31,6 +31,7 @@ export interface IndexStatus {
 // Stage 5: Content Extraction & Semantic Search types
 export interface ExtractionStatus {
     is_extracting: boolean;
+    is_paused: boolean;
     total_files: number;
     processed_files: number;
     failed_files: number;
@@ -150,6 +151,8 @@ interface FileStore {
     extractionStatus: ExtractionStatus | null;
     setExtractionStatus: (status: ExtractionStatus | null) => void;
     startContentExtraction: () => Promise<void>;
+    pauseContentExtraction: () => Promise<void>;
+    resumeContentExtraction: () => Promise<void>;
 
     // Semantic Search
     searchResults: HybridSearchResult[];
@@ -472,6 +475,14 @@ export const useFileStore = create<FileStore>((set, get) => ({
 
     startContentExtraction: async () => {
         await invoke('start_content_extraction');
+    },
+
+    pauseContentExtraction: async () => {
+        await invoke('pause_content_extraction');
+    },
+
+    resumeContentExtraction: async () => {
+        await invoke('resume_content_extraction');
     },
 
     // Semantic Search

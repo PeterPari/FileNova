@@ -86,6 +86,19 @@ pub fn run() {
             // Start background suggestion scanner
             suggestions::start_background_scanner(app.handle().clone());
 
+            // Listener for indexing finished to trigger extraction
+            let app_handle_clone = app.handle().clone();
+            app.listen("indexing-finished", move |_event| {
+                println!("Indexing finished, triggering content extraction...");
+                let state = app_handle_clone.state::<ExtractionState>();
+                let vector_store = app_handle_clone.state::<Arc<vector_store::VectorStore>>();
+                extraction::start_extraction(
+                    app_handle_clone.clone(),
+                    state.inner().clone(),
+                    Arc::clone(&vector_store),
+                );
+            });
+
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
@@ -111,6 +124,8 @@ pub fn run() {
             commands::get_recent_operations,
             // Stage 5: Content Extraction & Semantic Search
             commands::start_content_extraction,
+            commands::pause_content_extraction,
+            commands::resume_content_extraction,
             commands::get_extraction_status,
             commands::get_extraction_stats,
             commands::search_semantic,

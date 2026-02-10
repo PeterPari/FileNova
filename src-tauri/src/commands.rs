@@ -1096,6 +1096,16 @@ pub fn start_content_extraction(
 }
 
 #[tauri::command]
+pub fn pause_content_extraction(state: State<ExtractionState>) {
+    state.is_paused.store(true, Ordering::SeqCst);
+}
+
+#[tauri::command]
+pub fn resume_content_extraction(state: State<ExtractionState>) {
+    state.is_paused.store(false, Ordering::SeqCst);
+}
+
+#[tauri::command]
 pub fn get_extraction_status(state: State<ExtractionState>) -> ExtractionStatus {
     extraction::get_extraction_status(state.inner())
 }
