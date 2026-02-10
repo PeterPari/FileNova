@@ -18,7 +18,7 @@ use extraction::ExtractionState;
 use indexer::IndexerState;
 use search_index::IndexManager;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Listener, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -138,6 +138,8 @@ pub fn run() {
             commands::get_all_tags,
             commands::get_tag_stats,
             commands::auto_tag_file,
+            commands::start_auto_tagging,
+            commands::get_tags_for_directory,
             commands::get_rules,
             commands::save_rule,
             commands::delete_rule,

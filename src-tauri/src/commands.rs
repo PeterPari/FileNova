@@ -191,7 +191,7 @@ fn parse_size(size_str: &str) -> Option<u64> {
     Some((val * multiplier) as u64)
 }
 
-use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{Duration, Local, NaiveDate, NaiveDateTime, NaiveTime};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SearchHistoryEntry {
@@ -944,24 +944,79 @@ pub struct ActivityEntry {
     pub detected_at: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ActivityFilters {
+    pub time_range: Option<String>, // "today", "week", "month"
+    pub action_type: Option<Vec<String>>,
+    pub folder: Option<String>,
+    pub file_type: Option<Vec<String>>, // e.g., ["pdf", "jpg"]
+    pub limit: Option<i64>,
+}
+
 #[tauri::command]
-pub fn get_activity_feed(app: AppHandle, limit: Option<i64>) -> Result<Vec<ActivityEntry>, String> {
+pub fn get_activity_feed(app: AppHandle, filters: ActivityFilters) -> Result<Vec<ActivityEntry>, String> {
     let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
-    let limit = limit.unwrap_or(50);
+    let mut sql = "SELECT id, file_path, action, detected_at FROM activity WHERE 1=1".to_string();
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, file_path, action, detected_at 
-             FROM activity 
-             ORDER BY detected_at DESC 
-             LIMIT ?1",
-        )
-        .map_err(|e| e.to_string())?;
+    // Time Filter
+    if let Some(time_range) = &filters.time_range {
+        match time_range.as_str() {
+            "today" => sql.push_str(" AND detected_at >= date('now', 'start of day')"),
+            "week" => sql.push_str(" AND detected_at >= date('now', '-7 days')"),
+            "month" => sql.push_str(" AND detected_at >= date('now', '-30 days')"),
+            _ => {}
+        }
+    }
+
+    // Folder Filter
+    if let Some(folder) = &filters.folder {
+        if !folder.is_empty() {
+             sql.push_str(" AND file_path LIKE ?");
+             params.push(Box::new(format!("{}%", folder)));
+        }
+    }
+
+    // Action Filter
+    if let Some(actions) = &filters.action_type {
+        if !actions.is_empty() {
+            let placeholders: Vec<String> = actions.iter().map(|_| "?".to_string()).collect();
+            sql.push_str(&format!(" AND action IN ({})", placeholders.join(",")));
+            for action in actions {
+                params.push(Box::new(action.clone()));
+            }
+        }
+    }
+
+    // File Type Filter
+    if let Some(types) = &filters.file_type {
+         if !types.is_empty() {
+            let clauses: Vec<String> = types.iter().map(|_| "file_path LIKE ?".to_string()).collect();
+            sql.push_str(&format!(" AND ({})", clauses.join(" OR ")));
+            for t in types {
+                params.push(Box::new(format!("%.{}", t)));
+            }
+         }
+    }
+
+    sql.push_str(" ORDER BY detected_at DESC");
+
+    if let Some(limit) = filters.limit {
+        sql.push_str(" LIMIT ?");
+        params.push(Box::new(limit));
+    } else {
+         sql.push_str(" LIMIT 50");
+    }
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    
+    // Convert to vector of references for rusqlite
+    let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
     let activities = stmt
-        .query_map([limit], |row| {
+        .query_map(param_refs.as_slice(), |row| {
             Ok(ActivityEntry {
                 id: row.get(0)?,
                 file_path: row.get(1)?,
@@ -972,9 +1027,11 @@ pub fn get_activity_feed(app: AppHandle, limit: Option<i64>) -> Result<Vec<Activ
         .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
         .collect();
-
+        
     Ok(activities)
 }
+
+
 
 #[tauri::command]
 pub fn get_file_db_id(app: AppHandle, path: String) -> Result<Option<i64>, String> {
@@ -1252,6 +1309,17 @@ pub async fn get_tag_stats(app: AppHandle) -> Result<Vec<tagging::TagStat>, Stri
 #[tauri::command]
 pub async fn auto_tag_file(app: AppHandle, file_id: i64) -> Result<(), String> {
     tagging::auto_tag_file(&app, file_id).await
+}
+
+#[tauri::command]
+pub async fn start_auto_tagging(app: AppHandle, file_ids: Vec<i64>) -> Result<(), String> {
+    tagging::start_auto_tagging_task(app, file_ids);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_tags_for_directory(app: AppHandle, path: String) -> Result<std::collections::HashMap<String, Vec<Tag>>, String> {
+    tagging::get_tags_for_directory(&app, path).await
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

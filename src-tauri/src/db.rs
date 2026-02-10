@@ -3,6 +3,8 @@ use std::path::Path;
 
 pub fn init_db<P: AsRef<Path>>(path: P) -> Result<Connection> {
     let conn = Connection::open(path)?;
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
 
     // Create files table
     conn.execute(

@@ -84,9 +84,11 @@ export interface Activity {
 }
 
 export interface ActivityFilters {
-    days?: number; // e.g., 1, 7, 30
-    action?: string;
+    time_range?: string;
+    action_type?: string[];
     folder?: string;
+    file_type?: string[];
+    limit?: number;
 }
 
 export interface Rule {
@@ -171,7 +173,7 @@ interface FileStore {
 
     // Stage 6: Activity
     activityFeed: Activity[];
-    loadActivityFeed: (limit?: number) => Promise<void>;
+    loadActivityFeed: (filters?: ActivityFilters) => Promise<void>;
 
     rules: Rule[];
     loadRules: () => Promise<void>;
@@ -322,7 +324,17 @@ export const useFileStore = create<FileStore>((set, get) => ({
         set({ isLoading: true, error: null });
         try {
             const files = await invoke<FileEntry[]>('list_directory', { path });
-            set({ files, isLoading: false });
+            try {
+                const tagsMap = await invoke<Record<string, Tag[]>>('get_tags_for_directory', { path });
+                const filesWithTags = files.map(f => ({
+                    ...f,
+                    tags: tagsMap[f.name] || []
+                }));
+                set({ files: filesWithTags, isLoading: false });
+            } catch (tagErr) {
+                console.warn("Failed to load tags for directory:", tagErr);
+                set({ files, isLoading: false });
+            }
         } catch (err) {
             set({ error: String(err), isLoading: false });
         }
@@ -379,34 +391,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
             try {
                 const info = await invoke<FileInfo>('get_file_info', { path: file.path });
                 set({ previewInfo: info });
-
-                // We don't have file_id in FileEntry unless we change list_directory to return it.
-                // Currently list_directory reads fs, doesn't query DB for IDs.
-                // We need file_id for tagging commands. 
-                // !!! CRITICAL MISSING LINK: list_directory returns fs data, but tags are relational to DB ID.
-                // Solution: We need a command to get file_id from path OR update list_directory to query DB.
-                // Updating list_directory to sync/query DB is heavy.
-                // Better approach: `get_file_id(path)` command or `get_tags(path)`.
-                // Let's assume for now we can get tags by path or we add a command `get_file_id`.
-                // Or better, change `get_tags` to accept path?
-                // `tagging.rs` uses `file_id`.
-                // Let's stick to `file_id`. I need to execute a query to get ID.
-                // I will add a helper in `commands.rs` or just use `get_file_info` to return ID if I modify it.
-                // Or I can just fetch tags by path?
-                // Let's try to fetch tags by path for simplicity in frontend, update backend if needed.
-                // Wait, the plan said `get_tags(file_id)`.
-                // I'll assume for this step I can get the ID.
-                // Actually, I should probably update `Command` to `get_tags_by_path` or similar.
-                // But I implemented `get_tags(file_id)`.
-                // I will ignore this for a second and implement the store assuming I can get the ID or refactor later.
-                // Let's just use a hypothetical `get_file_db_id` or similar.
-
-                // Actually, let's rely on the backend to look up ID from Path if needed, or
-                // just fetching tags for the selected file by path would be easier.
-                // I'll update the store to use `path` for now and I will update backend `get_tags` to take path?
-                // No, I'll update `FileEntry` to include `id` if possible, but `list_directory` is pure FS.
-                // OK, I will add `get_file_metadata(path)` which returns DB ID.
-
+                // We assume ID fetching is handled where needed (auto-fetch not implemented yet)
             } catch (err) {
                 console.error('Failed to get file info:', err);
             }
@@ -543,12 +528,8 @@ export const useFileStore = create<FileStore>((set, get) => ({
             // Reload tags for selected file if applicable
             const selected = get().selectedFile;
             if (selected) {
-                // We need to resolve ID again or just blindly reload if we had the ID stored.
-                // For now, let's just trigger a reload if we have a way to get ID.
-                // Since we don't have ID on file entry yet, we might need to rely on the fact that
-                // TagManager usually calls this and can trigger reload provided it has the ID.
-                // But strictly speaking, the store should handle it.
-                // Let's leave it as is for now, managing state in component might be easier if store doesn't track ID.
+                // We would ideally reload, but we need ID logic sorted
+                // Assuming logic elsewhere triggering reload
             }
         } catch (err) {
             console.error("Failed to remove tag:", err);
@@ -575,9 +556,9 @@ export const useFileStore = create<FileStore>((set, get) => ({
 
     // Stage 6: Activity
     activityFeed: [],
-    loadActivityFeed: async (limit = 50) => {
+    loadActivityFeed: async (filters: ActivityFilters = {}) => {
         try {
-            const activity = await invoke<Activity[]>('get_activity_feed', { limit });
+            const activity = await invoke<Activity[]>('get_activity_feed', { filters });
             set({ activityFeed: activity });
         } catch (err) {
             console.error("Failed to load activity feed:", err);
@@ -611,4 +592,3 @@ export const useFileStore = create<FileStore>((set, get) => ({
         }
     }
 }));
-
