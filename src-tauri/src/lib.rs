@@ -42,7 +42,17 @@ pub fn run() {
             // Cleanup old trash on startup (background thread)
             let cleanup_app = app.handle().clone();
             std::thread::spawn(move || {
-                if let Err(e) = trash::cleanup_old_trash(&cleanup_app, 30) {
+                let db_path = cleanup_app.path().app_data_dir().unwrap().join("filenova.db");
+                let retention_days = if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                     db::get_setting(&conn, "trash_retention_days")
+                        .unwrap_or(None)
+                        .and_then(|v| v.parse::<i64>().ok())
+                        .unwrap_or(30)
+                } else {
+                    30
+                };
+
+                if let Err(e) = trash::cleanup_old_trash(&cleanup_app, retention_days) {
                     eprintln!("Failed to cleanup old trash: {}", e);
                 }
             });

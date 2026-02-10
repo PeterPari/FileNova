@@ -75,6 +75,7 @@ interface DuplicateStore {
     fetchRecentBatches: () => Promise<void>;
     setFilterType: (type: string | null) => void;
     autoSelectKeepNewest: (group: DuplicateGroup) => void;
+    autoSelectKeepInPath: (group: DuplicateGroup, pathSubstring: string) => void;
 }
 
 export const useDuplicateStore = create<DuplicateStore>((set, get) => ({
@@ -209,5 +210,12 @@ export const useDuplicateStore = create<DuplicateStore>((set, get) => ({
             a.modified_at > b.modified_at ? a : b
         );
         get().selectAllExceptKeep(group.files, newest.path);
+    },
+
+    autoSelectKeepInPath: (group, pathSubstring) => {
+        const keep = group.files.find((f) => f.path.startsWith(pathSubstring));
+        if (keep) {
+            get().selectAllExceptKeep(group.files, keep.path);
+        }
     },
 }));

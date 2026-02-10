@@ -29,6 +29,7 @@ export const DuplicateGroupCard = ({ group }: { group: DuplicateGroup }) => {
         setKeepFile,
         toggleFileForDeletion,
         autoSelectKeepNewest,
+        autoSelectKeepInPath,
         selectAllExceptKeep,
         deleteSelectedFiles,
         isLoading,
@@ -78,16 +79,36 @@ export const DuplicateGroupCard = ({ group }: { group: DuplicateGroup }) => {
                         {group.file_count} copies &middot; {formatSize(group.total_wasted_bytes)} wasted
                     </div>
                 </div>
-                <button
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        handleKeepNewest();
-                    }}
-                    className="text-xs px-3 py-1.5 bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 rounded-md hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors whitespace-nowrap"
-                >
-                    <Clock size={12} className="inline mr-1" />
-                    Keep Newest
-                </button>
+                <div className="flex gap-2">
+                    <button
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            handleKeepNewest();
+                        }}
+                        className="text-xs px-3 py-1.5 bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 rounded-md hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors whitespace-nowrap"
+                    >
+                        <Clock size={12} className="inline mr-1" />
+                        Newest
+                    </button>
+                    {/* Unique Folders Actions */}
+                    {Array.from(new Set(group.files.map(f => f.parent_path))).slice(0, 2).map(parentPath => {
+                        const folderName = parentPath.split(/[\\/]/).pop() || parentPath;
+                        return (
+                            <button
+                                key={parentPath}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    autoSelectKeepInPath(group, parentPath);
+                                    setExpanded(true);
+                                }}
+                                className="text-xs px-3 py-1.5 bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors whitespace-nowrap overflow-hidden max-w-[120px] truncate"
+                                title={`Keep file in ${parentPath}`}
+                            >
+                                Keep in {folderName}
+                            </button>
+                        );
+                    })}
+                </div>
             </button>
 
             {/* Expanded file list */}
@@ -157,11 +178,10 @@ const FileRow = ({
             {/* Keep radio */}
             <button
                 onClick={onKeep}
-                className={`w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
-                    isKept
-                        ? 'border-green-500 bg-green-500'
-                        : 'border-gray-300 dark:border-gray-600 hover:border-green-400'
-                }`}
+                className={`w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${isKept
+                    ? 'border-green-500 bg-green-500'
+                    : 'border-gray-300 dark:border-gray-600 hover:border-green-400'
+                    }`}
                 title="Keep this file"
             >
                 {isKept && <Shield size={10} className="text-white" />}
@@ -189,11 +209,10 @@ const FileRow = ({
             {!isKept && (
                 <button
                     onClick={onToggleDelete}
-                    className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
-                        isDeleting
-                            ? 'border-red-500 bg-red-500 text-white'
-                            : 'border-gray-300 dark:border-gray-600 hover:border-red-400'
-                    }`}
+                    className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${isDeleting
+                        ? 'border-red-500 bg-red-500 text-white'
+                        : 'border-gray-300 dark:border-gray-600 hover:border-red-400'
+                        }`}
                     title={isDeleting ? 'Unmark for deletion' : 'Mark for deletion'}
                 >
                     {isDeleting && (

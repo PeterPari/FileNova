@@ -15,6 +15,7 @@ export const SettingsModal = ({ onClose }: { onClose: () => void }) => {
     const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
     const [checkingAi, setCheckingAi] = useState(false);
     const [extractionStats, setExtractionStats] = useState<ExtractionStats | null>(null);
+    const [trashRetention, setTrashRetention] = useState(30);
 
     // Rules
     const [editingRule, setEditingRule] = useState<Rule | null>(null);
@@ -35,6 +36,9 @@ export const SettingsModal = ({ onClose }: { onClose: () => void }) => {
 
                 const model = await invoke<string | null>('get_app_setting', { key: 'ai_embedding_model' });
                 if (model) setModelName(model);
+
+                const retention = await invoke<string | null>('get_app_setting', { key: 'trash_retention_days' });
+                if (retention) setTrashRetention(parseInt(retention));
             } catch { /* use defaults */ }
 
             // Load extraction stats
@@ -45,6 +49,10 @@ export const SettingsModal = ({ onClose }: { onClose: () => void }) => {
         };
         loadSettings();
     }, []);
+
+    const handleSaveRetention = async () => {
+        await invoke('save_app_setting', { key: 'trash_retention_days', value: trashRetention.toString() });
+    };
 
     const handleSaveRule = async () => {
         if (editingRule) {
@@ -152,6 +160,24 @@ export const SettingsModal = ({ onClose }: { onClose: () => void }) => {
                             >
                                 Start Indexing
                             </button>
+                        </div>
+                    </section>
+
+                    {/* General Settings */}
+                    <section className="border-t border-gray-200 dark:border-gray-700 pt-6">
+                        <h3 className="font-medium mb-4">General Settings</h3>
+                        <div>
+                            <label className="block text-xs text-gray-500 mb-1">Trash Retention (Days)</label>
+                            <input
+                                type="number"
+                                min="1"
+                                max="365"
+                                value={trashRetention}
+                                onChange={(e) => setTrashRetention(parseInt(e.target.value) || 30)}
+                                onBlur={() => handleSaveRetention()}
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-transparent text-sm"
+                            />
+                            <p className="text-xs text-gray-400 mt-1">Files in FileNova Trash older than this will be permanently deleted on app startup.</p>
                         </div>
                     </section>
 
