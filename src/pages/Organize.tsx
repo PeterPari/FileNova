@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import SuggestionCard, { Suggestion } from '../components/Organize/SuggestionCard';
+import SuggestionCard, { Suggestion, SuggestionPlan } from '../components/Organize/SuggestionCard';
+import FolderStructureOptimizer from '../components/Organize/FolderStructureOptimizer';
 
 const Organize: React.FC = () => {
     const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
@@ -53,6 +54,21 @@ const Organize: React.FC = () => {
         }
     };
 
+    const handleModify = async (id: number, updatedPlan: SuggestionPlan) => {
+        try {
+            await invoke('modify_suggestion', { id, updatedPlan: JSON.stringify(updatedPlan) });
+            // Update local state
+            setSuggestions(prev => prev.map(s =>
+                s.id === id
+                    ? { ...s, plan_json: JSON.stringify(updatedPlan), status: 'modified' }
+                    : s
+            ));
+        } catch (e) {
+            console.error("Failed to modify suggestion:", e);
+            alert("Failed to update plan: " + e);
+        }
+    };
+
     useEffect(() => {
         fetchSuggestions();
     }, []);
@@ -72,8 +88,8 @@ const Organize: React.FC = () => {
                     onClick={handleAnalyze}
                     disabled={analyzing}
                     className={`flex items-center gap-2 px-6 py-3 rounded-lg font-bold shadow-lg transition-all ${analyzing
-                            ? 'bg-gray-700 cursor-not-allowed text-gray-400'
-                            : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-blue-900/30'
+                        ? 'bg-gray-700 cursor-not-allowed text-gray-400'
+                        : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-blue-900/30'
                         }`}
                 >
                     {analyzing ? (
@@ -93,28 +109,33 @@ const Organize: React.FC = () => {
             </div>
 
             <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
-                {loading && suggestions.length === 0 ? (
-                    <div className="flex items-center justify-center h-64 text-gray-500">
-                        Loading suggestions...
-                    </div>
-                ) : suggestions.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-64 text-gray-500 border-2 border-dashed border-gray-800 rounded-xl">
-                        <span className="text-4xl mb-4">✨</span>
-                        <h3 className="text-xl font-medium text-gray-400">All caught up!</h3>
-                        <p>No organization suggestions found. Try running an analysis.</p>
-                    </div>
-                ) : (
-                    <div className="max-w-4xl mx-auto">
-                        {suggestions.map(s => (
-                            <SuggestionCard
-                                key={s.id}
-                                suggestion={s}
-                                onAccept={handleAccept}
-                                onReject={handleReject}
-                            />
-                        ))}
-                    </div>
-                )}
+                <div className="max-w-4xl mx-auto pb-12">
+                    {loading && suggestions.length === 0 ? (
+                        <div className="flex items-center justify-center h-64 text-gray-500">
+                            Loading suggestions...
+                        </div>
+                    ) : suggestions.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center h-64 text-gray-500 border-2 border-dashed border-gray-800 rounded-xl mb-8">
+                            <span className="text-4xl mb-4">✨</span>
+                            <h3 className="text-xl font-medium text-gray-400">All caught up!</h3>
+                            <p>No organization suggestions found. Try running an analysis.</p>
+                        </div>
+                    ) : (
+                        <div className="mb-8">
+                            {suggestions.map(s => (
+                                <SuggestionCard
+                                    key={s.id}
+                                    suggestion={s}
+                                    onAccept={handleAccept}
+                                    onReject={handleReject}
+                                    onModify={handleModify}
+                                />
+                            ))}
+                        </div>
+                    )}
+
+                    <FolderStructureOptimizer />
+                </div>
             </div>
         </div>
     );

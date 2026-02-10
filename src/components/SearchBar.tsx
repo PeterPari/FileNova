@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Search, X, File, Folder } from 'lucide-react';
+import { Search, X, File, Folder, Clock, ArrowRight } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useFileStore } from '../store/fileStore';
 
@@ -8,13 +8,22 @@ interface SearchResult {
     score: number;
     name: string;
     extension?: string;
+    parent_path: string;
     size_bytes: number;
     modified_at: number;
+}
+
+interface SearchHistoryEntry {
+    id: number;
+    query: string;
+    result_count: number;
+    searched_at: number;
 }
 
 export const SearchBar = () => {
     const [query, setQuery] = useState('');
     const [results, setResults] = useState<SearchResult[]>([]);
+    const [history, setHistory] = useState<SearchHistoryEntry[]>([]);
     const [isOpen, setIsOpen] = useState(false);
     const [selectedIndex, setSelectedIndex] = useState(0);
     const inputRef = useRef<HTMLInputElement>(null);
@@ -28,11 +37,18 @@ export const SearchBar = () => {
                 search(query);
             } else {
                 setResults([]);
+                fetchHistory(); // Show history when query cleared
             }
         }, 300); // 300ms debounce
 
         return () => clearTimeout(timer);
     }, [query]);
+
+    useEffect(() => {
+        if (isOpen && !query) {
+            fetchHistory();
+        }
+    }, [isOpen, query]);
 
     // Shortcuts
     useEffect(() => {
@@ -40,6 +56,7 @@ export const SearchBar = () => {
             if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 'k')) {
                 e.preventDefault();
                 inputRef.current?.focus();
+                setIsOpen(true);
             }
         };
 
@@ -47,24 +64,41 @@ export const SearchBar = () => {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, []);
 
+    const fetchHistory = async () => {
+        try {
+            const hist = await invoke<SearchHistoryEntry[]>('get_search_history', { limit: 5 });
+            setHistory(hist);
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
     // List navigation shortcuts
-    const handleInputKeyDown = (e: React.KeyboardEvent) => { // Use React.KeyboardEvent for onKeyDown
+    const handleInputKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Escape') {
             setIsOpen(false);
             inputRef.current?.blur();
         }
-        if (isOpen && results.length > 0) {
+
+        const items = query ? results : history;
+        if (isOpen && items.length > 0) {
             if (e.key === 'ArrowDown') {
                 e.preventDefault();
-                setSelectedIndex(i => (i + 1) % results.length);
+                setSelectedIndex(i => (i + 1) % items.length);
             }
             if (e.key === 'ArrowUp') {
                 e.preventDefault();
-                setSelectedIndex(i => (i - 1 + results.length) % results.length);
+                setSelectedIndex(i => (i - 1 + items.length) % items.length);
             }
             if (e.key === 'Enter') {
                 e.preventDefault();
-                openFile(results[selectedIndex].path);
+                if (query) {
+                    // Open result
+                    openFile(results[selectedIndex].path);
+                } else {
+                    // Use history item
+                    setQuery(history[selectedIndex].query);
+                }
             }
         } else if (e.key === 'Enter' && query.trim()) {
             // Trigger full semantic search
@@ -98,19 +132,11 @@ export const SearchBar = () => {
 
     const openFile = async (path: string) => {
         try {
-            // Using invoke 'opener' if implemented, otherwise using a custom command
-            // Assuming 'opener' is available or similar
-            await invoke('open_file', { path }); // Placeholder, need to verify
-            // Actually, I should use tauri-plugin-opener if I added it.
-            // If not, I should implement a simple open command.
-            // Or navigate within app if it's a directory.
-
-            // For now, console log path to simulate
-            console.log("Opening:", path);
-            setIsOpen(false);
+            await invoke('plugin:opener|open_path', { path, with: null });
         } catch (e) {
-            console.log("Open file:", path);
+            console.error("Open file failed:", e);
         }
+        setIsOpen(false);
     };
 
     const formatSize = (bytes: number) => {
@@ -158,46 +184,75 @@ export const SearchBar = () => {
                 </div>
             </div>
 
-            {isOpen && results.length > 0 && (
+            {isOpen && (
                 <div className="absolute top-full left-0 right-0 mt-2 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 max-h-[60vh] overflow-y-auto z-50 divide-y divide-gray-100 dark:divide-gray-700">
-                    <div className="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 text-xs text-gray-500 font-medium flex justify-between items-center sticky top-0 backdrop-blur-sm z-10">
-                        <span>{results.length} results found</span>
-                        <span className="text-[10px] uppercase tracking-wider text-gray-400">Arrow Key Navigation</span>
-                    </div>
-                    <ul className="py-2">
-                        {results.map((result, index) => (
-                            <li
-                                key={result.path}
-                                className={`px-4 py-3 cursor-pointer flex items-center gap-3 transition-colors duration-150 group ${index === selectedIndex ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'}`}
-                                onClick={() => openFile(result.path)}
-                                onMouseEnter={() => setSelectedIndex(index)}
-                            >
-                                <div className={`p-2.5 rounded-lg shrink-0 ${index === selectedIndex ? 'bg-blue-100/50 dark:bg-blue-800/30 text-blue-600 dark:text-blue-400' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'}`}>
-                                    {result.extension ? <File size={20} className="stroke-[1.5]" /> : <Folder size={20} className="stroke-[1.5]" />}
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                    <div className="flex justify-between items-baseline mb-0.5">
-                                        <h4 className={`text-sm font-medium truncate ${index === selectedIndex ? 'text-blue-900 dark:text-blue-100' : 'text-gray-900 dark:text-gray-100'}`}>
-                                            {result.name}
-                                        </h4>
-                                        <span className="text-xs text-gray-400 whitespace-nowrap ml-3 font-mono">
-                                            {formatSize(result.size_bytes)}
-                                        </span>
-                                    </div>
-                                    <div className="flex justify-between items-center text-xs text-gray-500 dark:text-gray-400">
-                                        <span className="truncate mr-4 opacity-75" title={result.path}>
-                                            {/* Highlight match? For now just show path */}
-                                            {result.path}
-                                        </span>
-                                        <span className="flex items-center gap-1 whitespace-nowrap opacity-75">
-                                            {/* <CalendarDays size={10} /> */}
-                                            {formatDate(result.modified_at)}
-                                        </span>
-                                    </div>
-                                </div>
-                            </li>
-                        ))}
-                    </ul>
+
+                    {query ? (
+                        <>
+                            <div className="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 text-xs text-gray-500 font-medium flex justify-between items-center sticky top-0 backdrop-blur-sm z-10">
+                                <span>{results.length} results found</span>
+                                <span className="text-[10px] uppercase tracking-wider text-gray-400">Arrow Key Navigation</span>
+                            </div>
+                            <ul className="py-2">
+                                {results.map((result, index) => (
+                                    <li
+                                        key={result.path}
+                                        className={`px-4 py-3 cursor-pointer flex items-center gap-3 transition-colors duration-150 group ${index === selectedIndex ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'}`}
+                                        onClick={() => openFile(result.path)}
+                                        onMouseEnter={() => setSelectedIndex(index)}
+                                    >
+                                        <div className={`p-2.5 rounded-lg shrink-0 ${index === selectedIndex ? 'bg-blue-100/50 dark:bg-blue-800/30 text-blue-600 dark:text-blue-400' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'}`}>
+                                            {result.extension ? <File size={20} className="stroke-[1.5]" /> : <Folder size={20} className="stroke-[1.5]" />}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex justify-between items-baseline mb-0.5">
+                                                <h4 className={`text-sm font-medium truncate ${index === selectedIndex ? 'text-blue-900 dark:text-blue-100' : 'text-gray-900 dark:text-gray-100'}`}>
+                                                    {result.name}
+                                                </h4>
+                                                <span className="text-xs text-gray-400 whitespace-nowrap ml-3 font-mono">
+                                                    {formatSize(result.size_bytes)}
+                                                </span>
+                                            </div>
+                                            <div className="flex justify-between items-center text-xs text-gray-500 dark:text-gray-400">
+                                                <span className="truncate mr-4 opacity-75" title={result.path}>
+                                                    {result.path}
+                                                </span>
+                                                <span className="flex items-center gap-1 whitespace-nowrap opacity-75">
+                                                    {formatDate(result.modified_at)}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </li>
+                                ))}
+                            </ul>
+                        </>
+                    ) : (
+                        <>
+                            <div className="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 text-xs text-gray-500 font-medium flex justify-between items-center sticky top-0 backdrop-blur-sm z-10">
+                                <span>Recent Searches</span>
+                            </div>
+                            <ul className="py-2">
+                                {history.length > 0 ? history.map((item, index) => (
+                                    <li
+                                        key={item.id}
+                                        className={`px-4 py-2 cursor-pointer flex items-center gap-3 ${index === selectedIndex ? 'bg-gray-100 dark:bg-gray-700' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'}`}
+                                        onClick={() => setQuery(item.query)}
+                                        onMouseEnter={() => setSelectedIndex(index)}
+                                    >
+                                        <Clock size={16} className="text-gray-400" />
+                                        <div className="flex-1">
+                                            <span className="text-sm text-gray-700 dark:text-gray-200">{item.query}</span>
+                                        </div>
+                                        <ArrowRight size={14} className="text-gray-300 -rotate-45" />
+                                    </li>
+                                )) : (
+                                    <li className="px-4 py-4 text-center text-gray-400 text-sm">
+                                        No recent searches
+                                    </li>
+                                )}
+                            </ul>
+                        </>
+                    )}
                 </div>
             )}
         </div>

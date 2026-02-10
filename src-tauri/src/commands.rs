@@ -5,9 +5,9 @@ use crate::extraction::{self, ExtractionState, ExtractionStatus};
 use crate::indexer::{start_indexing as run_indexing, IndexStatus, IndexerState};
 use crate::search_index::{IndexManager, SearchResult};
 use crate::semantic_search::HybridSearchResult;
+use crate::tagging::{self, Tag}; // Stage 6
 use crate::vector_store::VectorStore;
 use crate::watcher::start_watcher;
-use crate::tagging::{self, Tag}; // Stage 6
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -46,9 +46,11 @@ pub struct FileInfo {
 
 #[tauri::command]
 pub fn start_indexing(app: AppHandle, paths: Vec<String>, state: State<IndexerState>) {
-    // Save paths to settings first?
-    // For now, just start indexing.
-    // Also start watching these paths.
+    // Save paths to settings
+    if let Ok(paths_json) = serde_json::to_string(&paths) {
+        let _ = save_app_setting(app.clone(), "indexed_paths".to_string(), paths_json);
+    }
+
     let paths_clone = paths.clone();
     run_indexing(app.clone(), paths, state.inner().clone());
     start_watcher(app, paths_clone);
@@ -167,6 +169,178 @@ pub fn get_file_info(path: &str) -> Result<FileInfo, String> {
     })
 }
 
+use regex::Regex;
+
+fn parse_size(size_str: &str) -> Option<u64> {
+    let re = Regex::new(r"(?i)^([\d\.]+)(b|kb|mb|gb|tb)?$").ok()?;
+    let caps = re.captures(size_str)?;
+    let val: f64 = caps[1].parse().ok()?;
+    let unit = caps
+        .get(2)
+        .map(|m| m.as_str().to_lowercase())
+        .unwrap_or("b".to_string());
+
+    let multiplier = match unit.as_str() {
+        "kb" => 1024.0,
+        "mb" => 1024.0 * 1024.0,
+        "gb" => 1024.0 * 1024.0 * 1024.0,
+        "tb" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => 1.0,
+    };
+
+    Some((val * multiplier) as u64)
+}
+
+use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SearchHistoryEntry {
+    pub id: i64,
+    pub query: String,
+    pub search_type: String,
+    pub result_count: i64,
+    pub searched_at: i64,
+}
+
+#[tauri::command]
+pub fn get_search_history(app: AppHandle, limit: usize) -> Result<Vec<SearchHistoryEntry>, String> {
+    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, query, search_type, result_count, searched_at 
+             FROM search_history 
+             ORDER BY searched_at DESC 
+             LIMIT ?1",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let history = stmt
+        .query_map([limit], |row| {
+             let searched_at: String = row.get(4)?;
+             // Convert string datetime to unix timestamp (approximated for display sorting if needed, or pass string)
+             // Actually, DB stores DATETIME as string usually in sqlite unless integer mode.
+             // `current_timestamp` or `datetime('now')` is string.
+             // We can return string or parse.
+             // Let's parse to i64 for frontend consistency if possible, or just string.
+             // Front end expects number? Let's check.
+             // `SearchResult` has `modified_at` as i64 (seconds).
+             // SQLite `DATETIME` is string "YYYY-MM-DD HH:MM:SS".
+             
+             let dt_str: String = row.get(4)?;
+             let dt = NaiveDateTime::parse_from_str(&dt_str, "%Y-%m-%d %H:%M:%S")
+                .unwrap_or_default()
+                .and_utc()
+                .timestamp();
+
+            Ok(SearchHistoryEntry {
+                id: row.get(0)?,
+                query: row.get(1)?,
+                search_type: row.get(2)?,
+                result_count: row.get::<_, i64>(3).unwrap_or(0),
+                searched_at: dt,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for entry in history {
+        if let Ok(e) = entry {
+            result.push(e);
+        }
+    }
+    Ok(result)
+}
+
+fn parse_date_query(val: &str) -> Option<String> {
+    let now = Local::now();
+    let today_start = now.date_naive().and_time(NaiveTime::MIN).and_local_timezone(Local).unwrap().timestamp();
+    let today_end = now.date_naive().and_time(NaiveTime::from_hms_milli_opt(23, 59, 59, 999).unwrap()).and_local_timezone(Local).unwrap().timestamp();
+
+    match val.to_lowercase().as_str() {
+        "today" => Some(format!("modified_at:[{} TO {}]", today_start, today_end)),
+        "yesterday" => {
+            let y = now - Duration::days(1);
+            let y_start = y.date_naive().and_time(NaiveTime::MIN).and_local_timezone(Local).unwrap().timestamp();
+            let y_end = y.date_naive().and_time(NaiveTime::from_hms_milli_opt(23, 59, 59, 999).unwrap()).and_local_timezone(Local).unwrap().timestamp();
+            Some(format!("modified_at:[{} TO {}]", y_start, y_end))
+        }
+        "last-week" => {
+            let start = (now - Duration::days(7)).timestamp();
+            Some(format!("modified_at:[{} TO {}]", start, today_end))
+        }
+        "last-month" => {
+             let start = (now - Duration::days(30)).timestamp();
+             Some(format!("modified_at:[{} TO {}]", start, today_end))
+        }
+        // Handle explicit years e.g., 2023
+        v if v.len() == 4 && v.chars().all(char::is_numeric) => {
+             if let Ok(year) = v.parse::<i32>() {
+                 let start = NaiveDate::from_ymd_opt(year, 1, 1)?.and_hms_opt(0,0,0)?.and_local_timezone(Local).unwrap().timestamp();
+                 let end = NaiveDate::from_ymd_opt(year, 12, 31)?.and_hms_opt(23,59,59)?.and_local_timezone(Local).unwrap().timestamp();
+                 Some(format!("modified_at:[{} TO {}]", start, end))
+             } else { None }
+        }
+        _ => None
+    }
+}
+
+fn parse_advanced_query(query: &str) -> String {
+    let mut final_query = query.to_string();
+
+    // 1. Handle type: -> extension:
+    let re_type = Regex::new(r"(?i)\btype:(\w+)").unwrap();
+    final_query = re_type.replace_all(&final_query, "extension:$1").to_string();
+
+    // 2. Handle size:
+    let re_size = Regex::new(r"(?i)\bsize:([<>]?)([\d\.]+[kmgt]?b?)").unwrap();
+    if let Some(_caps) = re_size.captures(&final_query.clone()) {
+        final_query = re_size
+            .replace_all(&final_query, |caps: &regex::Captures| {
+                let op = &caps[1];
+                let val_str = &caps[2];
+                if let Some(bytes) = parse_size(val_str) {
+                    match op {
+                        ">" => format!("size_bytes:{{{} TO *}}", bytes),
+                        "<" => format!("size_bytes:{{* TO {}}}", bytes),
+                        _ => format!("size_bytes:[{} TO {}]", bytes, bytes),
+                    }
+                } else {
+                    caps[0].to_string()
+                }
+            })
+            .to_string();
+    }
+
+    // 3. Handle modified: / date:
+    let re_date = Regex::new(r"(?i)\b(modified|date):([\w-]+)").unwrap();
+    if let Some(_caps) = re_date.captures(&final_query.clone()) {
+         final_query = re_date.replace_all(&final_query, |caps: &regex::Captures| {
+            let val = &caps[2];
+            if let Some(q) = parse_date_query(val) {
+                q
+            } else {
+                caps[0].to_string()
+            }
+         }).to_string();
+    }
+    
+    // 4. Handle path:
+    // path:foo -> path:"foo" (phrase query) or just path:foo
+    // If path contains slashes, we need to be careful with tokenization.
+    // Tantivy path field is TEXT. Standard tokenizer splits on slashes?
+    // Let's wrap value in quotes if it looks like a path?
+    // Or just let user type it.
+    // Replace `path:val` with `path:val` (noop), but maybe handle generic "in:folder"?
+    // "in:Downloads" -> parent_path:Downloads
+    let re_in = Regex::new(r"(?i)\bin:(\S+)").unwrap();
+     final_query = re_in.replace_all(&final_query, "parent_path:$1").to_string();
+
+
+    final_query
+}
+
 #[tauri::command]
 pub fn search_keyword(
     app: AppHandle,
@@ -174,42 +348,32 @@ pub fn search_keyword(
     query: String,
     _filters: Option<SearchFilters>,
 ) -> Result<Vec<SearchResult>, String> {
-    // Parse query for tags
-    let mut search_query = query.clone();
+    // 0. Pre-process query for advanced syntax
+    let advanced_query = parse_advanced_query(&query);
+
+    let mut search_query = advanced_query.clone();
     let mut tags_to_filter = Vec::new();
 
-    // Simple parser for "tag:value"
-    if query.contains("tag:") {
-        let parts: Vec<&str> = query.split_whitespace().collect();
-        let mut clean_parts = Vec::new();
-        for part in parts {
-            if part.starts_with("tag:") {
-                let tag = part.strip_prefix("tag:").unwrap_or("");
-                if !tag.is_empty() {
-                    tags_to_filter.push(tag.to_string());
-                }
-            } else {
-                clean_parts.push(part);
-            }
-        }
-        search_query = clean_parts.join(" ");
+    let re_tag = Regex::new(r"(?i)\btag:(\w+)").unwrap();
+    for cap in re_tag.captures_iter(&query) {
+        tags_to_filter.push(cap[1].to_string());
     }
+    // Remove tags from search_query
+    search_query = re_tag.replace_all(&search_query, "").to_string();
 
     // 1. If tags present, find allowed paths
     let allowed_paths: Option<Vec<String>> = if !tags_to_filter.is_empty() {
         let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
         let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
-        
-        // Build query to find files with ALL tags (AND logic)
-        // Or ANY tag? Usually AND for filters.
-        // Let's do ANY for now as it's easier, or intersection for AND.
-        // Let's do intersection (files must have all specified tags).
-        
+
         let mut file_ids: Option<std::collections::HashSet<i64>> = None;
 
         for tag in tags_to_filter {
-            let mut stmt = conn.prepare("SELECT file_id FROM tags WHERE tag LIKE ?1").map_err(|e| e.to_string())?;
-            let ids: std::collections::HashSet<i64> = stmt.query_map([tag], |row| row.get(0))
+            let mut stmt = conn
+                .prepare("SELECT file_id FROM tags WHERE tag LIKE ?1")
+                .map_err(|e| e.to_string())?;
+            let ids: std::collections::HashSet<i64> = stmt
+                .query_map([tag], |row| row.get(0))
                 .map_err(|e| e.to_string())?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -222,56 +386,73 @@ pub fn search_keyword(
         }
 
         let final_ids = file_ids.unwrap_or_default();
-        
+
         if final_ids.is_empty() {
-            return Ok(vec![]); // No files match tags
+            return Ok(vec![]); 
         }
 
-        // Get paths
-        // This might be slow if many files. 
-        // For Stage 6, we'll assume reasonable limits.
-        let ids_str = final_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
-        let mut stmt = conn.prepare(&format!("SELECT path FROM files WHERE id IN ({})", ids_str)).map_err(|e| e.to_string())?;
-        let paths: Vec<String> = stmt.query_map([], |row| row.get(0))
+        let ids_str = final_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        if ids_str.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut stmt = conn
+            .prepare(&format!("SELECT path FROM files WHERE id IN ({})", ids_str))
+            .map_err(|e| e.to_string())?;
+        let paths: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
             .map_err(|e| e.to_string())?
             .filter_map(|r| r.ok())
             .collect();
-            
+
         Some(paths)
     } else {
         None
     };
 
     // 2. Perform Search
-    if search_query.trim().is_empty() {
-        // If only tags were provided, return files matching tags (sorted by modified?)
-        if let Some(paths) = allowed_paths {
-             // We need to construct SearchResult from paths
-             // This requires querying file info.
-             // Hack: Use get_file_info on them? Or just return basic info.
-             // We can use the IndexManager logic but bypass Tantivy search if no query.
-             // But IndexManager doesn't have "get_by_path".
-             // Let's just return basic results from DB info or skip for now.
-             // Simplest: if no text query, we can't search via Tantivy easily without "*" query.
-             // Tantivy "*" query works.
-             let results = state.search("*", 50).map_err(|e| e.to_string())?;
-             // Filter
-             let set: std::collections::HashSet<String> = paths.into_iter().collect();
-             return Ok(results.into_iter().filter(|r| set.contains(&r.path)).collect());
+    let results_res = if search_query.trim().is_empty() {
+        if let Some(paths) = &allowed_paths {
+             state.search("*", 50)
+        } else {
+             Ok(vec![])
         }
-        return Ok(vec![]);
-    }
-
-    let results = state.search(&search_query, 50).map_err(|e| e.to_string())?;
+    } else {
+         state.search(&search_query, 50)
+    };
     
-    // 3. Filter results
+    let mut results = results_res.map_err(|e| e.to_string())?;
+    
+    // 3. Filter by paths if tags were used
     if let Some(paths) = allowed_paths {
         let set: std::collections::HashSet<String> = paths.into_iter().collect();
-        let filtered = results.into_iter().filter(|r| set.contains(&r.path)).collect();
-        Ok(filtered)
-    } else {
-        Ok(results)
+         results = results
+            .into_iter()
+            .filter(|r| set.contains(&r.path))
+            .collect();
     }
+    
+    // 4. Save to History (Async or just ignore error)
+    if !query.trim().is_empty() {
+        let app_handle = app.clone();
+        let query_clone = query.clone();
+        let count = results.len() as i64;
+        std::thread::spawn(move || {
+             let db_path = app_handle.path().app_data_dir().unwrap().join("filenova.db");
+             if let Ok(conn) = Connection::open(db_path) {
+                 let _ = conn.execute(
+                     "INSERT INTO search_history (query, search_type, result_count, searched_at) VALUES (?1, 'keyword', ?2, datetime('now'))",
+                     params![query_clone, count]
+                 );
+             }
+        });
+    }
+
+    Ok(results)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -571,18 +752,19 @@ pub fn get_duplicates(
                  LIMIT ?2 OFFSET ?3",
             )
             .map_err(|e| e.to_string())?;
-        let rows: Vec<_> = stmt.query_map(params![gt, limit, offset], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-            ))
-        })
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
+        let rows: Vec<_> = stmt
+            .query_map(params![gt, limit, offset], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
         rows
     } else {
         let mut stmt = conn
@@ -593,18 +775,19 @@ pub fn get_duplicates(
                  LIMIT ?1 OFFSET ?2",
             )
             .map_err(|e| e.to_string())?;
-        let rows: Vec<_> = stmt.query_map(params![limit, offset], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-            ))
-        })
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
+        let rows: Vec<_> = stmt
+            .query_map(params![limit, offset], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
         rows
     };
 
@@ -717,7 +900,10 @@ pub fn undo_batch(app: AppHandle, batch_id: String) -> Result<Vec<String>, Strin
 }
 
 #[tauri::command]
-pub fn get_recent_operations(app: AppHandle, limit: Option<i64>) -> Result<Vec<OperationBatch>, String> {
+pub fn get_recent_operations(
+    app: AppHandle,
+    limit: Option<i64>,
+) -> Result<Vec<OperationBatch>, String> {
     let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
@@ -795,11 +981,12 @@ pub fn get_file_db_id(app: AppHandle, path: String) -> Result<Option<i64>, Strin
     let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
-    let id: Option<i64> = conn.query_row(
-        "SELECT id FROM files WHERE path = ?1",
-        [&path],
-        |row| row.get(0),
-    ).optional().map_err(|e| e.to_string())?;
+    let id: Option<i64> = conn
+        .query_row("SELECT id FROM files WHERE path = ?1", [&path], |row| {
+            row.get(0)
+        })
+        .optional()
+        .map_err(|e| e.to_string())?;
 
     Ok(id)
 }
@@ -1055,4 +1242,118 @@ pub async fn get_tag_stats(app: AppHandle) -> Result<Vec<tagging::TagStat>, Stri
 #[tauri::command]
 pub async fn auto_tag_file(app: AppHandle, file_id: i64) -> Result<(), String> {
     tagging::auto_tag_file(&app, file_id).await
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DirectoryNode {
+    pub name: String,
+    pub path: String,
+    pub children: Vec<DirectoryNode>,
+    pub is_directory: bool,
+    pub size: u64,
+    pub file_count: usize,
+}
+
+fn build_tree(path: &Path, current_depth: usize, max_depth: usize) -> DirectoryNode {
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let path_str = path.to_string_lossy().to_string();
+
+    if !path.is_dir() {
+        let size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        return DirectoryNode {
+            name,
+            path: path_str,
+            children: vec![],
+            is_directory: false,
+            size,
+            file_count: 1,
+        };
+    }
+
+    if current_depth >= max_depth {
+        return DirectoryNode {
+            name,
+            path: path_str,
+            children: vec![],
+            is_directory: true,
+            size: 0,
+            file_count: 0,
+        };
+    }
+
+    let mut children = Vec::new();
+    let mut total_size = 0;
+    let mut total_count = 0;
+
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let child_node = build_tree(&entry.path(), current_depth + 1, max_depth);
+            total_size += child_node.size;
+            total_count += child_node.file_count;
+            children.push(child_node);
+        }
+    }
+
+    children.sort_by(|a, b| match (a.is_directory, b.is_directory) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.cmp(&b.name),
+    });
+
+    DirectoryNode {
+        name,
+        path: path_str,
+        children,
+        is_directory: true,
+        size: total_size,
+        file_count: total_count,
+    }
+}
+
+#[tauri::command]
+pub async fn get_directory_tree(path: String, max_depth: usize) -> Result<DirectoryNode, String> {
+    let root = Path::new(&path);
+    if !root.exists() {
+        return Err("Path does not exist".to_string());
+    }
+
+    // Run blocking IO in a separate thread
+    let path_clone = path.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let root = Path::new(&path_clone);
+        build_tree(root, 0, max_depth)
+    }).await.map_err(|e| e.to_string())?;
+
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_size() {
+        assert_eq!(parse_size("10b"), Some(10));
+        assert_eq!(parse_size("1kb"), Some(1024));
+        assert_eq!(parse_size("1.5mb"), Some(1572864));
+        assert_eq!(parse_size("1gb"), Some(1073741824));
+    }
+
+    #[test]
+    fn test_parse_advanced_query() {
+        assert_eq!(parse_advanced_query("test type:pdf"), "test extension:pdf");
+        assert_eq!(
+            parse_advanced_query("size:>10mb"),
+            "size_bytes:{10485760 TO *}"
+        );
+        assert_eq!(parse_advanced_query("size:<1kb"), "size_bytes:{* TO 1024}");
+        // Mixed
+        let q = parse_advanced_query("vacation type:jpg size:>5mb");
+        assert!(q.contains("extension:jpg"));
+        assert!(q.contains("size_bytes:{5242880 TO *}"));
+    }
 }

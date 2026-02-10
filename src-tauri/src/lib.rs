@@ -8,9 +8,10 @@ mod search_index;
 mod semantic_search;
 mod trash;
 mod vector_store;
-mod watcher;
-mod tagging;
+mod execution;
 mod suggestions;
+mod tagging;
+mod watcher;
 
 use duplicates::DuplicateScanState;
 use extraction::ExtractionState;
@@ -72,6 +73,9 @@ pub fn run() {
                 }
             });
 
+            // Start background suggestion scanner
+            suggestions::start_background_scanner(app.handle().clone());
+
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
@@ -114,6 +118,8 @@ pub fn run() {
             commands::delete_rule,
             commands::get_activity_feed,
             commands::get_file_db_id,
+            commands::get_directory_tree,
+            commands::get_search_history,
             // Stage 7: Suggestions
             suggestions::generate_suggestions,
             suggestions::get_pending_suggestions,

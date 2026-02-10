@@ -212,6 +212,22 @@ pub fn init_db<P: AsRef<Path>>(path: P) -> Result<Connection> {
         [],
     )?;
 
+    // Stage 3: Search History
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS search_history (
+            id INTEGER PRIMARY KEY,
+            query TEXT NOT NULL,
+            search_type TEXT NOT NULL, -- 'keyword', 'semantic', 'hybrid'
+            result_count INTEGER,
+            searched_at DATETIME NOT NULL
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_search_history_time ON search_history(searched_at DESC)",
+        [],
+    )?;
+
     Ok(conn)
 }
 

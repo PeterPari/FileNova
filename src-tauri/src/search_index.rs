@@ -19,6 +19,7 @@ pub struct SearchResult {
     pub score: f32,
     pub name: String,
     pub extension: Option<String>,
+    pub parent_path: String,
     pub size_bytes: i64,
     pub modified_at: i64,
 }
@@ -97,32 +98,10 @@ impl IndexManager {
 
         writer.add_document(doc)?;
 
-        // In Manual policy, need to commit to see changes?
-        // Or wait for bulk commit?
-        // App expects real-time updates.
-        // Committing on every update is slow.
-        // But for file watcher, maybe okay?
-        // Or debounce commit.
-        // For now, let's NOT commit here, but let the caller control.
-        // But `add_or_update_file` is called by watcher one by one.
-        // A periodic commit or commit after batch is better.
-        // But watcher calls this per event.
-        // Let's rely on explicit commit or auto-commit if implemented.
-        // Reverting to manual commit in `commit()` function.
-        // But watcher loop calls `add_or_update_file` then `commit`.
-        // Let's check `watcher.rs`.
-        // `watcher.rs` calls `indexer.add_or_update_file`? No, `watcher.rs` calls `index_manager.add_or_update_file`.
-        // `watcher.rs` calls `start_watcher` -> `handle_event` -> `index_manager.add_or_update_file`.
-        // It does NOT call `commit`.
-        // So I should commit here if I want visible updates.
-        // Committing every file change is slow.
-        // But for single file edits it's fine. Bulk adds will be slow.
-        // The `rebuild_index` does bulk add then commit.
-        // So here I'll add `writer.commit()?` for responsiveness.
-
+        // For real-time updates, we commit. In high-load, this should be batched.
         writer.commit()?;
 
-        // Also reload reader
+        // Reload reader to make changes visible immediately
         self.reader.reload()?;
 
         Ok(())
@@ -195,8 +174,6 @@ impl IndexManager {
                 }
             }
             writer.commit()?;
-            // No reload here? loop ends. reader reload via `commit` call outside?
-            // Reader reload logic is in `reader.reload()`.
         }
         self.reader
             .reload()
@@ -211,11 +188,19 @@ impl IndexManager {
         let path_field = schema.get_field("path").unwrap();
         let name_field = schema.get_field("name").unwrap();
         let extension_field = schema.get_field("extension").unwrap();
+        let parent_path_field = schema.get_field("parent_path").unwrap();
         let size_bytes_field = schema.get_field("size_bytes").unwrap();
         let modified_at_field = schema.get_field("modified_at").unwrap();
 
         // Basic query parsing
-        let query_parser = QueryParser::for_index(&self.index, vec![name_field, path_field]);
+        // We might want to use a more complex parser if 'query_str' contains field queries logic
+        // But `QueryParser` handles field:value syntax automatically if fields are registered.
+        // We should register all fields we want to be searchable via "field:val" syntax.
+        let mut query_parser = QueryParser::for_index(&self.index, vec![name_field, path_field]);
+        query_parser.set_field_fuzzy(name_field, true, 2, true); // Fuzzy search on name
+
+        // Define fields that can be searched explicitly
+        // invalid fields in query throws error.
 
         if query_str.trim().is_empty() {
             return Ok(vec![]);
@@ -227,15 +212,6 @@ impl IndexManager {
         let mut results = Vec::new();
         for (score, doc_address) in top_docs {
             let retrieved_doc: TantivyDocument = searcher.doc(doc_address)?;
-
-            // Access fields
-            // Tantivy 0.22 use `get_first(field)` -> Option<&OwnedValue>
-            // OwnedValue enum: Str(String), I64(i64), etc.
-            // But OwnedValue is internal? No.
-            // `TantivyDocument` implements `Document` trait?
-            // `get_first` returns `Option<&Value>`.
-            // `Value` trait?
-            // Use `.as_str()` on the value.
 
             let path = retrieved_doc
                 .get_first(path_field)
@@ -254,6 +230,12 @@ impl IndexManager {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
+            let parent_path = retrieved_doc
+                .get_first(parent_path_field)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
             let size_bytes = retrieved_doc
                 .get_first(size_bytes_field)
                 .and_then(|v| v.as_i64())
@@ -269,6 +251,7 @@ impl IndexManager {
                 score,
                 name,
                 extension,
+                parent_path,
                 size_bytes,
                 modified_at,
             });

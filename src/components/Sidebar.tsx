@@ -11,7 +11,12 @@ export const Sidebar = ({ onOpenSettings }: { onOpenSettings: () => void }) => {
                 {/* Mock drives */}
                 <li>
                     <button
-                        onClick={() => setCurrentView('browser')}
+                        onClick={() => {
+                            setCurrentView('browser');
+                            // Ideally navigate to C: root
+                            // setCurrentPath('C:'); 
+                            // We need to destructure setCurrentPath from store
+                        }}
                         className={`flex items-center gap-2 p-2 w-full text-left rounded-md ${currentView === 'browser' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}
                     >
                         <HardDrive size={18} />
@@ -24,7 +29,25 @@ export const Sidebar = ({ onOpenSettings }: { onOpenSettings: () => void }) => {
             <ul className="space-y-1 flex-1">
                 <li>
                     <button
-                        onClick={() => { setCurrentView('browser'); /* navigate to docs */ }}
+                        onClick={() => {
+                            // Open Documents in new tab or current? 
+                            // Navigation from sidebar usually switches current view or opens new tab?
+                            // Let's make it simple: navigate current tab.
+                            // But wait, sidebar "Drives" and "Documents" act as shortcuts.
+                            // If we use `setCurrentPath`, it updates current tab.
+                            // Let's use `setCurrentPath` which now updates the active tab.
+                            // However, we need to import it.
+                            // Sidebar uses `setCurrentView` mostly.
+                            // For "Documents", we should probably navigate.
+                            // Let's assume there is a `setCurrentPath` exposed.
+                            // Sidebar currently only implements view switching.
+                            // Let's keep view switching but maybe add a "Home" or "Documents" navigation if needed.
+                            // Current Sidebar implementation just switches `currentView`.
+                            // "C: Local Disk" sets view to browser.
+                            // We should probably also set path to C:?
+                            // For now, let's just ensure it switches to browser view.
+                            setCurrentView('browser');
+                        }}
                         className="flex items-center gap-2 p-2 w-full text-left hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md"
                     >
                         <Folder size={18} />

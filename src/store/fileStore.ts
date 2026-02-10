@@ -101,18 +101,37 @@ interface FileStore {
     currentPath: string;
     files: FileEntry[];
     viewMode: 'grid' | 'list';
+    sortField: 'name' | 'size' | 'date' | 'type';
+    sortDirection: 'asc' | 'desc';
+
     currentView: 'browser' | 'dashboard' | 'duplicates' | 'semantic-search' | 'activity' | 'organize';
     selectedFile: FileEntry | null;
     previewInfo: FileInfo | null;
     isLoading: boolean;
     error: string | null;
 
+    isSettingsOpen: boolean;
+    toggleSettings: () => void;
+
     setCurrentPath: (path: string) => Promise<void>;
     loadFiles: (path: string) => Promise<void>;
     setViewMode: (mode: 'grid' | 'list') => void;
+    setSort: (field: 'name' | 'size' | 'date' | 'type') => void;
+
+    // Sort helper
+    getSortedFiles: () => FileEntry[];
     setCurrentView: (view: 'browser' | 'dashboard' | 'duplicates' | 'semantic-search' | 'activity' | 'organize') => void;
     selectFile: (file: FileEntry | null) => Promise<void>;
     navigateUp: () => Promise<void>;
+
+    // Tabs
+    tabs: { path: string; label: string; history: string[]; historyIndex: number }[];
+    activeTabIndex: number;
+    addTab: (path?: string) => void;
+    closeTab: (index: number) => void;
+    setActiveTab: (index: number) => void;
+    goBack: () => Promise<void>;
+    goForward: () => Promise<void>;
 
     // Indexing
     indexingStatus: IndexStatus | null;
@@ -122,6 +141,7 @@ interface FileStore {
     setIndexingStatus: (status: IndexStatus) => void;
     addIndexedPath: (path: string) => Promise<void>;
     removeIndexedPath: (path: string) => Promise<void>;
+    loadIndexedPaths: () => Promise<void>;
     startIndexing: () => Promise<void>;
     pauseIndexing: () => Promise<void>;
     resumeIndexing: () => Promise<void>;
@@ -160,28 +180,145 @@ export const useFileStore = create<FileStore>((set, get) => ({
     currentPath: '',
     files: [],
     viewMode: 'grid',
+    sortField: 'name',
+    sortDirection: 'asc',
+
     currentView: 'browser',
     selectedFile: null,
     previewInfo: null,
     isLoading: false,
     error: null,
+    isSettingsOpen: false,
+    toggleSettings: () => set((state) => ({ isSettingsOpen: !state.isSettingsOpen })),
 
+    // Tabs
+    tabs: [{ path: '', label: 'Home', history: [''], historyIndex: 0 }],
+    activeTabIndex: 0,
+
+    addTab: (path: string = '') => {
+        const { tabs } = get();
+        const newTab = {
+            path,
+            label: path ? path.split(/[/\\]/).pop() || path : 'Home',
+            history: [path],
+            historyIndex: 0
+        };
+        set({ tabs: [...tabs, newTab], activeTabIndex: tabs.length });
+        get().loadFiles(path); // Load for new tab
+    },
+
+    closeTab: (index: number) => {
+        const { tabs, activeTabIndex } = get();
+        if (tabs.length <= 1) return; // Don't close last tab
+
+        const newTabs = tabs.filter((_, i) => i !== index);
+        let newIndex = activeTabIndex;
+
+        if (index < activeTabIndex) {
+            newIndex = activeTabIndex - 1;
+        } else if (index === activeTabIndex) {
+            newIndex = Math.max(0, index - 1);
+        } else {
+            // Closed tab was to the right, index stays same
+            newIndex = activeTabIndex;
+        }
+
+        // Safety clamp
+        if (newIndex >= newTabs.length) newIndex = newTabs.length - 1;
+
+        set({ tabs: newTabs, activeTabIndex: newIndex });
+        get().loadFiles(newTabs[newIndex].path);
+    },
+
+    setActiveTab: (index: number) => {
+        set({ activeTabIndex: index });
+        const { tabs } = get();
+        if (tabs[index]) {
+            // check if path changed?
+            // Load regardless to refresh view
+            set({ currentPath: tabs[index].path }); // Sync currentPath immediately
+            get().loadFiles(tabs[index].path);
+        }
+    },
+
+    // Modified to update current tab and history
     setCurrentPath: async (path: string) => {
+        const { tabs, activeTabIndex } = get();
+        const activeTab = tabs[activeTabIndex];
+
+        if (!activeTab) return;
+
+        // Verify if we are actually changing path to avoid history dupes if called redundantly
+        if (activeTab.path === path) {
+            // Just reload
+            await get().loadFiles(path);
+            return;
+        }
+
+        const newTabs = [...tabs];
+        const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
+        newHistory.push(path);
+
+        newTabs[activeTabIndex] = {
+            ...activeTab,
+            path: path,
+            label: path ? path.split(/[/\\]/).pop() || path : 'Home',
+            history: newHistory,
+            historyIndex: newHistory.length - 1
+        };
+
+        set({ tabs: newTabs }); // Update tabs state
+
+        // Also update legacy currentPath for backward compat if anyone uses it directly (Layout uses it)
         set({ currentPath: path });
         await get().loadFiles(path);
     },
+
+    goBack: async () => {
+        const { tabs, activeTabIndex } = get();
+        const activeTab = tabs[activeTabIndex];
+        if (!activeTab || activeTab.historyIndex <= 0) return;
+
+        const newIndex = activeTab.historyIndex - 1;
+        const newPath = activeTab.history[newIndex];
+
+        const newTabs = [...tabs];
+        newTabs[activeTabIndex] = {
+            ...activeTab,
+            path: newPath,
+            label: newPath ? newPath.split(/[/\\]/).pop() || newPath : 'Home',
+            historyIndex: newIndex
+        };
+
+        set({ tabs: newTabs, currentPath: newPath });
+        await get().loadFiles(newPath);
+    },
+
+    goForward: async () => {
+        const { tabs, activeTabIndex } = get();
+        const activeTab = tabs[activeTabIndex];
+        if (!activeTab || activeTab.historyIndex >= activeTab.history.length - 1) return;
+
+        const newIndex = activeTab.historyIndex + 1;
+        const newPath = activeTab.history[newIndex];
+
+        const newTabs = [...tabs];
+        newTabs[activeTabIndex] = {
+            ...activeTab,
+            path: newPath,
+            label: newPath ? newPath.split(/[/\\]/).pop() || newPath : 'Home',
+            historyIndex: newIndex
+        };
+
+        set({ tabs: newTabs, currentPath: newPath });
+        await get().loadFiles(newPath);
+    },
+
 
     loadFiles: async (path: string) => {
         set({ isLoading: true, error: null });
         try {
             const files = await invoke<FileEntry[]>('list_directory', { path });
-            // TODO: Ideally verify if we need to load tags for all files here? 
-            // Might be expensive to load tags for every file in the directory immediately.
-            // For now, let's keep it simple and just load files. Tags can be loaded on demand or lazily if we want to show them in the grid.
-            // Actually, showing tags in grid is a requirement. 
-            // "In file browser: show tag chips next to/below file name"
-            // We might need to update list_directory to return tags or fetch them in batch.
-            // For this iteration, let's stick to basic file list and maybe load tags for selected file.
             set({ files, isLoading: false });
         } catch (err) {
             set({ error: String(err), isLoading: false });
@@ -189,6 +326,48 @@ export const useFileStore = create<FileStore>((set, get) => ({
     },
 
     setViewMode: (mode) => set({ viewMode: mode }),
+
+    setSort: (field) => {
+        const currentField = get().sortField;
+        const currentDir = get().sortDirection;
+
+        if (currentField === field) {
+            set({ sortDirection: currentDir === 'asc' ? 'desc' : 'asc' });
+        } else {
+            set({ sortField: field, sortDirection: 'asc' });
+        }
+    },
+
+    getSortedFiles: () => {
+        const { files, sortField, sortDirection } = get();
+        const sorted = [...files].sort((a, b) => {
+            // Always directories first
+            if (a.is_directory !== b.is_directory) {
+                return a.is_directory ? -1 : 1;
+            }
+
+            let compare = 0;
+            switch (sortField) {
+                case 'name':
+                    compare = a.name.localeCompare(b.name);
+                    break;
+                case 'size':
+                    compare = a.size - b.size;
+                    break;
+                case 'date':
+                    compare = a.modified_at - b.modified_at;
+                    break;
+                case 'type':
+                    // Extension sort
+                    const extA = a.name.split('.').pop() || '';
+                    const extB = b.name.split('.').pop() || '';
+                    compare = extA.localeCompare(extB);
+                    break;
+            }
+            return sortDirection === 'asc' ? compare : -compare;
+        });
+        return sorted;
+    },
     setCurrentView: (view) => set({ currentView: view }),
 
     selectFile: async (file) => {
@@ -261,6 +440,18 @@ export const useFileStore = create<FileStore>((set, get) => ({
     removeIndexedPath: async (path: string) => {
         const newPaths = get().settings.indexedPaths.filter(p => p !== path);
         set({ settings: { ...get().settings, indexedPaths: newPaths } });
+    },
+
+    loadIndexedPaths: async () => {
+        try {
+            const pathsJson = await invoke<string | null>('get_app_setting', { key: 'indexed_paths' });
+            if (pathsJson) {
+                const paths = JSON.parse(pathsJson) as string[];
+                set({ settings: { ...get().settings, indexedPaths: paths } });
+            }
+        } catch (err) {
+            console.error("Failed to load indexed paths:", err);
+        }
     },
 
     startIndexing: async () => {

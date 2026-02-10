@@ -1,6 +1,6 @@
 use crate::search_index::IndexManager;
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use std::collections::VecDeque;
 use std::fs;
 use std::path::Path;
@@ -37,9 +37,11 @@ pub fn start_watcher(app: AppHandle, paths: Vec<String>) {
         for res in rx {
             match res {
                 Ok(event) => {
-                    // Log to activity table
                     let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-                    if let Ok(conn) = Connection::open(&db_path) {
+                    let conn = Connection::open(&db_path).ok();
+
+                    if let Some(conn) = conn {
+                        // Log to activity table
                         let kind = format!("{:?}", event.kind);
                         for path in &event.paths {
                             let path_str = path.to_string_lossy().to_string();
@@ -70,72 +72,84 @@ pub fn start_watcher(app: AppHandle, paths: Vec<String>) {
                                         if now.duration_since(alert_cooldown)
                                             > Duration::from_secs(300)
                                         {
-                                            // Alert max once every 5 mins
                                             let _ = app
                                                 .emit("suspicious-activity", recent_events.len());
                                             alert_cooldown = now;
-                                            // Reset to avoid spamming immediate subsequent alerts?
-                                            // Maybe not, just cooldown is enough.
                                         }
                                     }
                                 }
                                 _ => {}
                             }
                         }
-                    }
 
-                    // Update Index
-                    let index_manager = app.state::<Arc<IndexManager>>();
+                        // Update Index
+                        let index_manager = app.state::<Arc<IndexManager>>();
 
-                    for path in &event.paths {
-                        let path_str = path.to_string_lossy().to_string();
+                        for path in &event.paths {
+                            let path_str = path.to_string_lossy().to_string();
 
-                        match event.kind {
-                            EventKind::Create(_) | EventKind::Modify(_) => {
-                                if let Ok(metadata) = fs::metadata(path) {
-                                    if metadata.is_file() {
-                                        let name = path
-                                            .file_name()
-                                            .unwrap_or_default()
-                                            .to_string_lossy()
-                                            .to_string();
-                                        let extension = path
-                                            .extension()
-                                            .map(|e| e.to_string_lossy().to_string());
-                                        let parent = path
-                                            .parent()
-                                            .map(|p| p.to_string_lossy().to_string())
-                                            .unwrap_or_default();
-                                        let size = metadata.len() as i64;
-                                        let modified = metadata
-                                            .modified()
-                                            .unwrap_or(SystemTime::now())
-                                            .duration_since(UNIX_EPOCH)
-                                            .unwrap_or_default()
-                                            .as_secs()
-                                            as i64;
+                            match event.kind {
+                                EventKind::Create(_) | EventKind::Modify(_) => {
+                                    if let Ok(metadata) = fs::metadata(path) {
+                                        if metadata.is_file() {
+                                            let name = path
+                                                .file_name()
+                                                .unwrap_or_default()
+                                                .to_string_lossy()
+                                                .to_string();
+                                            let extension = path
+                                                .extension()
+                                                .map(|e| e.to_string_lossy().to_string());
+                                            let parent = path
+                                                .parent()
+                                                .map(|p| p.to_string_lossy().to_string())
+                                                .unwrap_or_default();
+                                            let size = metadata.len() as i64;
+                                            let modified = metadata
+                                                .modified()
+                                                .unwrap_or(SystemTime::now())
+                                                .duration_since(UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs()
+                                                as i64;
 
-                                        let _ = index_manager.add_or_update_file(
-                                            &path_str,
-                                            &name,
-                                            extension.as_deref(),
-                                            &parent,
-                                            size,
-                                            modified,
-                                        );
-                                        let _ = index_manager.commit();
+                                            // Update SQLite
+                                            let _ = conn.execute(
+                                                "INSERT INTO files (path, name, extension, size_bytes, modified_at, parent_path, indexed_at)
+                                                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
+                                                 ON CONFLICT(path) DO UPDATE SET
+                                                    size_bytes=excluded.size_bytes,
+                                                    modified_at=excluded.modified_at,
+                                                    indexed_at=excluded.indexed_at",
+                                                params![path_str, name, extension, size, modified, parent],
+                                            );
+
+                                            let _ = index_manager.add_or_update_file(
+                                                &path_str,
+                                                &name,
+                                                extension.as_deref(),
+                                                &parent,
+                                                size,
+                                                modified,
+                                            );
+                                            let _ = index_manager.commit();
+                                        }
                                     }
                                 }
-                            }
-                            EventKind::Remove(_) => {
-                                let _ = index_manager.remove_file(&path_str);
-                                let _ = index_manager.commit();
-                            }
-                            _ => {}
-                        }
-                    }
+                                EventKind::Remove(_) => {
+                                    // Update SQLite
+                                    let _ = conn
+                                        .execute("DELETE FROM files WHERE path = ?1", [&path_str]);
 
-                    let _ = app.emit("file-changed", event); // Forward to frontend
+                                    let _ = index_manager.remove_file(&path_str);
+                                    let _ = index_manager.commit();
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        let _ = app.emit("file-changed", event); // Forward to frontend
+                    }
                 }
                 Err(e) => eprintln!("Watch error: {:?}", e),
             }
