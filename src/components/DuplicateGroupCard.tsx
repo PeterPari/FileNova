@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { ChevronRight, Trash2, Shield, Clock, Image, Hash } from 'lucide-react';
+import { ChevronRight, Trash2, Shield, Clock, Image, Hash, FileText } from 'lucide-react';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { DuplicateGroup, DuplicateFileEntry, useDuplicateStore } from '../store/duplicateStore';
 
 function formatSize(bytes: number): string {
@@ -13,6 +14,13 @@ function formatSize(bytes: number): string {
 function formatDate(ts: number): string {
     if (!ts) return 'Unknown';
     return new Date(ts * 1000).toLocaleDateString();
+}
+
+const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp']);
+
+function isImageFile(path: string): boolean {
+    const ext = path.split('.').pop()?.toLowerCase() ?? '';
+    return IMAGE_EXTENSIONS.has(ext);
 }
 
 const TYPE_BADGE: Record<string, { label: string; color: string; icon: typeof Hash }> = {
@@ -186,6 +194,20 @@ const FileRow = ({
             >
                 {isKept && <Shield size={10} className="text-white" />}
             </button>
+
+            {/* Thumbnail */}
+            <div className="w-9 h-9 rounded-md bg-gray-100 dark:bg-gray-700 overflow-hidden flex items-center justify-center flex-shrink-0">
+                {isImageFile(file.path) ? (
+                    <img
+                        src={convertFileSrc(file.path)}
+                        alt={file.name}
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                    />
+                ) : (
+                    <FileText size={16} className="text-gray-400" />
+                )}
+            </div>
 
             {/* File info */}
             <div className="flex-1 min-w-0">

@@ -192,7 +192,7 @@ fn scan_exact_duplicates(conn: &Connection, state: &DuplicateScanState) -> rusql
     let now = chrono::Utc::now().to_rfc3339();
 
     // Find all hashes with more than one file
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT hash_blake3, COUNT(*) as cnt, MIN(size_bytes) as single_size
          FROM files
          WHERE hash_blake3 IS NOT NULL AND is_directory = 0
@@ -227,7 +227,7 @@ fn scan_exact_duplicates(conn: &Connection, state: &DuplicateScanState) -> rusql
 
         // Insert member files
         let mut file_stmt =
-            conn.prepare("SELECT id, path FROM files WHERE hash_blake3 = ?1 AND is_directory = 0")?;
+            conn.prepare_cached("SELECT id, path FROM files WHERE hash_blake3 = ?1 AND is_directory = 0")?;
         let files: Vec<(i64, String)> = file_stmt
             .query_map([hash], |row| Ok((row.get(0)?, row.get(1)?)))?
             .filter_map(|r| r.ok())
@@ -274,7 +274,7 @@ fn scan_perceptual_duplicates(
 
     // Step 1: Find image files needing perceptual hashing
     let unhashed: Vec<(i64, String)> = {
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT id, path FROM files
              WHERE extension IN ('jpg','jpeg','png','gif','webp','bmp')
                AND is_directory = 0
@@ -308,7 +308,7 @@ fn scan_perceptual_duplicates(
         let tx = conn.transaction()?;
         {
             let mut update_stmt =
-                tx.prepare("UPDATE files SET perceptual_hash = ?1 WHERE id = ?2")?;
+                tx.prepare_cached("UPDATE files SET perceptual_hash = ?1 WHERE id = ?2")?;
             for (id, hash) in &results {
                 let _ = update_stmt.execute(params![hash, id]);
             }
@@ -319,7 +319,7 @@ fn scan_perceptual_duplicates(
     let _ = app.emit("duplicate-scan-progress", get_status(state));
 
     // Step 4: Load all perceptual hashes and find near-duplicate groups
-    let mut all_stmt = conn.prepare(
+    let mut all_stmt = conn.prepare_cached(
         "SELECT id, path, perceptual_hash, size_bytes FROM files
          WHERE perceptual_hash IS NOT NULL AND is_directory = 0",
     )?;
@@ -379,7 +379,7 @@ fn scan_perceptual_duplicates(
         // We only want perceptual groups that are NOT exact duplicates
         let mut has_distinct_hashes = false;
         {
-            let mut exact_check = conn.prepare("SELECT hash_blake3 FROM files WHERE id = ?1")?;
+            let mut exact_check = conn.prepare_cached("SELECT hash_blake3 FROM files WHERE id = ?1")?;
             let mut first_hash: Option<Option<String>> = None;
             for &idx in members {
                 let file_id = all_images[idx].0;
@@ -490,7 +490,7 @@ fn scan_smart_duplicates(
     // We only care about files that are NOT exact duplicates (optional optimization, but let's just fetch all and filter later)
     // Actually, to avoid O(N^2), let's limit to files < 500MB to avoid massive files being part of this check if we were doing content checks,
     // but for name checks, size doesn't matter much.
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT id, name, extension, path, size_bytes, hash_blake3 FROM files
          WHERE is_directory = 0 AND extension IS NOT NULL",
     )?;
@@ -638,4 +638,99 @@ fn scan_smart_duplicates(
         .fetch_add(total_wasted, Ordering::SeqCst);
 
     Ok(group_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_extensions_recognized() {
+        for ext in ["jpg", "jpeg", "png", "gif", "webp", "bmp"] {
+            assert!(is_image_file(Path::new(&format!("photo.{}", ext))));
+        }
+    }
+
+    #[test]
+    fn non_image_rejected() {
+        for ext in ["txt", "pdf", "rs", "exe", "mp4"] {
+            assert!(!is_image_file(Path::new(&format!("f.{}", ext))));
+        }
+    }
+
+    #[test]
+    fn image_case_insensitive() {
+        assert!(is_image_file(Path::new("photo.JPG")));
+        assert!(is_image_file(Path::new("photo.Png")));
+    }
+
+    #[test]
+    fn no_extension_not_image() {
+        assert!(!is_image_file(Path::new("Makefile")));
+    }
+
+    #[test]
+    fn union_find_basic() {
+        let mut uf = UnionFind::new(5);
+        assert_ne!(uf.find(0), uf.find(1));
+        uf.union(0, 1);
+        assert_eq!(uf.find(0), uf.find(1));
+    }
+
+    #[test]
+    fn union_find_transitive() {
+        let mut uf = UnionFind::new(5);
+        uf.union(0, 1);
+        uf.union(1, 2);
+        assert_eq!(uf.find(0), uf.find(2));
+    }
+
+    #[test]
+    fn union_find_separate_groups() {
+        let mut uf = UnionFind::new(4);
+        uf.union(0, 1);
+        uf.union(2, 3);
+        assert_ne!(uf.find(0), uf.find(2));
+    }
+
+    #[test]
+    fn union_find_self_union() {
+        let mut uf = UnionFind::new(3);
+        uf.union(1, 1);
+        assert_eq!(uf.find(1), 1);
+    }
+
+    #[test]
+    fn levenshtein_identical() {
+        assert_eq!(levenshtein("hello", "hello"), 0);
+    }
+
+    #[test]
+    fn levenshtein_empty() {
+        assert_eq!(levenshtein("", "abc"), 3);
+        assert_eq!(levenshtein("abc", ""), 3);
+        assert_eq!(levenshtein("", ""), 0);
+    }
+
+    #[test]
+    fn levenshtein_single_edit() {
+        assert_eq!(levenshtein("cat", "bat"), 1);
+        assert_eq!(levenshtein("cat", "cats"), 1);
+        assert_eq!(levenshtein("cats", "cat"), 1);
+    }
+
+    #[test]
+    fn levenshtein_known_distance() {
+        assert_eq!(levenshtein("kitten", "sitting"), 3);
+        assert_eq!(levenshtein("saturday", "sunday"), 3);
+    }
+
+    #[test]
+    fn scan_state_defaults() {
+        let state = DuplicateScanState::new();
+        let status = get_status(&state);
+        assert!(!status.is_scanning);
+        assert_eq!(status.total_groups, 0);
+        assert_eq!(status.total_wasted_bytes, 0);
+    }
 }

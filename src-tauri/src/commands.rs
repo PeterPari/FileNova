@@ -2,7 +2,8 @@ use crate::db::{get_setting, save_setting};
 use crate::duplicates::{self, DuplicateScanState, DuplicateScanStatus};
 use crate::embeddings::EmbeddingConfig;
 use crate::extraction::{self, ExtractionState, ExtractionStatus};
-use crate::indexer::{start_indexing as run_indexing, IndexStatus, IndexerState};
+use crate::indexer::{build_status, start_indexing as run_indexing, IndexStatus, IndexerState};
+use crate::long_path::safe_path;
 use crate::search_index::{IndexManager, SearchResult};
 use crate::semantic_search::HybridSearchResult;
 use crate::tagging::{self, Tag}; // Stage 6
@@ -19,8 +20,21 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SearchFilters {
-    pub file_types: Option<Vec<String>>,
-    // Add other filters as needed later
+    pub file_types: Vec<String>,
+    pub size_range: Option<(u64, u64)>,
+    pub date_range: Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
+    pub location: Option<String>,
+}
+
+impl Default for SearchFilters {
+    fn default() -> Self {
+        Self {
+            file_types: Vec::new(),
+            size_range: None,
+            date_range: None,
+            location: None,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -68,31 +82,24 @@ pub fn resume_indexing(state: State<IndexerState>) {
 
 #[tauri::command]
 pub fn get_index_status(state: State<IndexerState>) -> IndexStatus {
-    IndexStatus {
-        total_files: state.total_files.load(Ordering::Relaxed),
-        processed_files: state.processed_files.load(Ordering::Relaxed),
-        current_path: state.current_path.lock().unwrap().clone(),
-        is_indexing: state.is_indexing.load(Ordering::Relaxed),
-    }
+    build_status(state.inner())
 }
 
 #[tauri::command]
 pub fn get_app_setting(app: AppHandle, key: String) -> Result<Option<String>, String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(&app)?;
     get_setting(&conn, &key).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn save_app_setting(app: AppHandle, key: String, value: String) -> Result<(), String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(&app)?;
     save_setting(&conn, &key, &value).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn list_directory(path: &str) -> Result<Vec<FileEntry>, String> {
-    let entries = fs::read_dir(path).map_err(|e| e.to_string())?;
+    let entries = fs::read_dir(safe_path(Path::new(path))).map_err(|e| e.to_string())?;
     let mut files = Vec::new();
 
     for entry in entries {
@@ -133,7 +140,7 @@ pub fn list_directory(path: &str) -> Result<Vec<FileEntry>, String> {
 #[tauri::command]
 pub fn get_file_info(path: &str) -> Result<FileInfo, String> {
     let path_obj = Path::new(path);
-    let metadata = fs::metadata(path_obj).map_err(|e| e.to_string())?;
+    let metadata = fs::metadata(safe_path(path_obj)).map_err(|e| e.to_string())?;
 
     let created_at = metadata
         .created()
@@ -191,7 +198,7 @@ fn parse_size(size_str: &str) -> Option<u64> {
     Some((val * multiplier) as u64)
 }
 
-use chrono::{Duration, Local, NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SearchHistoryEntry {
@@ -204,11 +211,10 @@ pub struct SearchHistoryEntry {
 
 #[tauri::command]
 pub fn get_search_history(app: AppHandle, limit: usize) -> Result<Vec<SearchHistoryEntry>, String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(&app)?;
 
     let mut stmt = conn
-        .prepare(
+        .prepare_cached(
             "SELECT id, query, search_type, result_count, searched_at 
              FROM search_history 
              ORDER BY searched_at DESC 
@@ -218,7 +224,7 @@ pub fn get_search_history(app: AppHandle, limit: usize) -> Result<Vec<SearchHist
 
     let history = stmt
         .query_map([limit], |row| {
-             let searched_at: String = row.get(4)?;
+             let _searched_at: String = row.get(4)?;
              // Convert string datetime to unix timestamp (approximated for display sorting if needed, or pass string)
              // Actually, DB stores DATETIME as string usually in sqlite unless integer mode.
              // `current_timestamp` or `datetime('now')` is string.
@@ -253,92 +259,279 @@ pub fn get_search_history(app: AppHandle, limit: usize) -> Result<Vec<SearchHist
     Ok(result)
 }
 
-fn parse_date_query(val: &str) -> Option<String> {
-    let now = Local::now();
-    let today_start = now.date_naive().and_time(NaiveTime::MIN).and_local_timezone(Local).unwrap().timestamp();
-    let today_end = now.date_naive().and_time(NaiveTime::from_hms_milli_opt(23, 59, 59, 999).unwrap()).and_local_timezone(Local).unwrap().timestamp();
-
-    match val.to_lowercase().as_str() {
-        "today" => Some(format!("modified_at:[{} TO {}]", today_start, today_end)),
-        "yesterday" => {
-            let y = now - Duration::days(1);
-            let y_start = y.date_naive().and_time(NaiveTime::MIN).and_local_timezone(Local).unwrap().timestamp();
-            let y_end = y.date_naive().and_time(NaiveTime::from_hms_milli_opt(23, 59, 59, 999).unwrap()).and_local_timezone(Local).unwrap().timestamp();
-            Some(format!("modified_at:[{} TO {}]", y_start, y_end))
-        }
-        "last-week" => {
-            let start = (now - Duration::days(7)).timestamp();
-            Some(format!("modified_at:[{} TO {}]", start, today_end))
-        }
-        "last-month" => {
-             let start = (now - Duration::days(30)).timestamp();
-             Some(format!("modified_at:[{} TO {}]", start, today_end))
-        }
-        // Handle explicit years e.g., 2023
-        v if v.len() == 4 && v.chars().all(char::is_numeric) => {
-             if let Ok(year) = v.parse::<i32>() {
-                 let start = NaiveDate::from_ymd_opt(year, 1, 1)?.and_hms_opt(0,0,0)?.and_local_timezone(Local).unwrap().timestamp();
-                 let end = NaiveDate::from_ymd_opt(year, 12, 31)?.and_hms_opt(23,59,59)?.and_local_timezone(Local).unwrap().timestamp();
-                 Some(format!("modified_at:[{} TO {}]", start, end))
-             } else { None }
-        }
-        _ => None
+fn normalize_extension(value: &str) -> Option<String> {
+    let cleaned = value.trim().trim_start_matches('.').to_lowercase();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
     }
 }
 
-fn parse_advanced_query(query: &str) -> String {
-    let mut final_query = query.to_string();
+fn to_utc_range(start: NaiveDateTime, end: NaiveDateTime) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    let start_local = Local.from_local_datetime(&start).single()?;
+    let end_local = Local.from_local_datetime(&end).single()?;
+    Some((start_local.with_timezone(&Utc), end_local.with_timezone(&Utc)))
+}
 
-    // 1. Handle type: -> extension:
-    let re_type = Regex::new(r"(?i)\btype:(\w+)").unwrap();
-    final_query = re_type.replace_all(&final_query, "extension:$1").to_string();
+fn parse_single_date_range(value: &str) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    let value = value.trim();
 
-    // 2. Handle size:
-    let re_size = Regex::new(r"(?i)\bsize:([<>]?)([\d\.]+[kmgt]?b?)").unwrap();
-    if let Some(_caps) = re_size.captures(&final_query.clone()) {
-        final_query = re_size
-            .replace_all(&final_query, |caps: &regex::Captures| {
-                let op = &caps[1];
-                let val_str = &caps[2];
-                if let Some(bytes) = parse_size(val_str) {
-                    match op {
-                        ">" => format!("size_bytes:{{{} TO *}}", bytes),
-                        "<" => format!("size_bytes:{{* TO {}}}", bytes),
-                        _ => format!("size_bytes:[{} TO {}]", bytes, bytes),
-                    }
-                } else {
-                    caps[0].to_string()
-                }
-            })
-            .to_string();
+    if value.len() == 4 && value.chars().all(char::is_numeric) {
+        let year = value.parse::<i32>().ok()?;
+        let start = NaiveDate::from_ymd_opt(year, 1, 1)?.and_hms_opt(0, 0, 0)?;
+        let end = NaiveDate::from_ymd_opt(year, 12, 31)?.and_hms_opt(23, 59, 59)?;
+        return to_utc_range(start, end);
     }
 
-    // 3. Handle modified: / date:
-    let re_date = Regex::new(r"(?i)\b(modified|date):([\w-]+)").unwrap();
-    if let Some(_caps) = re_date.captures(&final_query.clone()) {
-         final_query = re_date.replace_all(&final_query, |caps: &regex::Captures| {
-            let val = &caps[2];
-            if let Some(q) = parse_date_query(val) {
-                q
+    if value.len() == 7 {
+        let parts: Vec<_> = value.split('-').collect();
+        if parts.len() == 2 {
+            let year = parts[0].parse::<i32>().ok()?;
+            let month = parts[1].parse::<u32>().ok()?;
+            let start = NaiveDate::from_ymd_opt(year, month, 1)?.and_hms_opt(0, 0, 0)?;
+            let next_month = if month == 12 {
+                NaiveDate::from_ymd_opt(year + 1, 1, 1)?
             } else {
-                caps[0].to_string()
-            }
-         }).to_string();
+                NaiveDate::from_ymd_opt(year, month + 1, 1)?
+            };
+            let end_date = next_month - Duration::days(1);
+            let end = end_date.and_hms_opt(23, 59, 59)?;
+            return to_utc_range(start, end);
+        }
     }
-    
-    // 4. Handle path:
-    // path:foo -> path:"foo" (phrase query) or just path:foo
-    // If path contains slashes, we need to be careful with tokenization.
-    // Tantivy path field is TEXT. Standard tokenizer splits on slashes?
-    // Let's wrap value in quotes if it looks like a path?
-    // Or just let user type it.
-    // Replace `path:val` with `path:val` (noop), but maybe handle generic "in:folder"?
-    // "in:Downloads" -> parent_path:Downloads
-    let re_in = Regex::new(r"(?i)\bin:(\S+)").unwrap();
-     final_query = re_in.replace_all(&final_query, "parent_path:$1").to_string();
 
+    if let Ok(day) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        let start = day.and_hms_opt(0, 0, 0)?;
+        let end = day.and_hms_opt(23, 59, 59)?;
+        return to_utc_range(start, end);
+    }
 
-    final_query
+    None
+}
+
+fn parse_date_range_value(value: &str) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    let raw = value.trim().trim_matches('"');
+    let lowered = raw.to_lowercase();
+    let now = Local::now();
+
+    match lowered.as_str() {
+        "today" => {
+            let start = now.date_naive().and_time(NaiveTime::MIN);
+            let end = now
+                .date_naive()
+                .and_time(NaiveTime::from_hms_milli_opt(23, 59, 59, 999)?);
+            return to_utc_range(start, end);
+        }
+        "last-week" => {
+            let start = (now - Duration::days(7))
+                .date_naive()
+                .and_time(NaiveTime::MIN);
+            let end = now
+                .date_naive()
+                .and_time(NaiveTime::from_hms_milli_opt(23, 59, 59, 999)?);
+            return to_utc_range(start, end);
+        }
+        "last-month" => {
+            let start = (now - Duration::days(30))
+                .date_naive()
+                .and_time(NaiveTime::MIN);
+            let end = now
+                .date_naive()
+                .and_time(NaiveTime::from_hms_milli_opt(23, 59, 59, 999)?);
+            return to_utc_range(start, end);
+        }
+        _ => {}
+    }
+
+    if raw.contains("..") {
+        let parts: Vec<_> = raw.split("..").collect();
+        if parts.len() == 2 {
+            let start = parse_single_date_range(parts[0])?.0;
+            let end = parse_single_date_range(parts[1])?.1;
+            return Some((start, end));
+        }
+    }
+
+    parse_single_date_range(raw)
+}
+
+fn parse_advanced_query(query: &str) -> (String, SearchFilters) {
+    let mut filters = SearchFilters::default();
+    let mut remaining = query.to_string();
+
+    let re_type = Regex::new(r#"(?i)\btype:(\"[^\"]+\"|[^\s]+)"#).unwrap();
+    for cap in re_type.captures_iter(query) {
+        let raw = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        for ext in raw.trim_matches('"').split(',') {
+            if let Some(cleaned) = normalize_extension(ext) {
+                filters.file_types.push(cleaned);
+            }
+        }
+    }
+    remaining = re_type.replace_all(&remaining, "").to_string();
+
+    let re_size_range = Regex::new(r"(?i)\bsize:([\d\.]+[kmgt]?b?)\s*-\s*([\d\.]+[kmgt]?b?)").unwrap();
+    for cap in re_size_range.captures_iter(query) {
+        let min_val = parse_size(&cap[1]);
+        let max_val = parse_size(&cap[2]);
+        if let (Some(min), Some(max)) = (min_val, max_val) {
+            let (min_v, max_v) = if min <= max { (min, max) } else { (max, min) };
+            filters.size_range = Some((min_v, max_v));
+        }
+    }
+    remaining = re_size_range.replace_all(&remaining, "").to_string();
+
+    let re_size = Regex::new(r"(?i)\bsize:([<>]=?|=)?([\d\.]+[kmgt]?b?)").unwrap();
+    for cap in re_size.captures_iter(&remaining) {
+        let op = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        if let Some(bytes) = parse_size(&cap[2]) {
+            let range = match op {
+                ">" | ">=" => Some((bytes, u64::MAX)),
+                "<" | "<=" => Some((0, bytes)),
+                _ => Some((bytes, bytes)),
+            };
+            filters.size_range = range;
+        }
+    }
+    remaining = re_size.replace_all(&remaining, "").to_string();
+
+    let re_modified = Regex::new(r#"(?i)\bmodified:(\"[^\"]+\"|[^\s]+)"#).unwrap();
+    for cap in re_modified.captures_iter(query) {
+        let raw = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        if let Some(range) = parse_date_range_value(raw) {
+            filters.date_range = Some(range);
+        }
+    }
+    remaining = re_modified.replace_all(&remaining, "").to_string();
+
+    let re_path = Regex::new(r#"(?i)\bpath:(\"[^\"]+\"|[^\s]+)"#).unwrap();
+    for cap in re_path.captures_iter(query) {
+        let raw = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let value = raw.trim_matches('"').to_string();
+        if !value.is_empty() {
+            filters.location = Some(value);
+        }
+    }
+    remaining = re_path.replace_all(&remaining, "").to_string();
+
+    let re_in = Regex::new(r#"(?i)\bin:(\"[^\"]+\"|[^\s]+)"#).unwrap();
+    for cap in re_in.captures_iter(query) {
+        let raw = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let value = raw.trim_matches('"').to_string();
+        if !value.is_empty() {
+            filters.location = Some(value);
+        }
+    }
+    remaining = re_in.replace_all(&remaining, "").to_string();
+
+    let remaining = remaining.split_whitespace().collect::<Vec<_>>().join(" ");
+    (remaining.trim().to_string(), filters)
+}
+
+fn merge_search_filters(mut base: SearchFilters, extra: SearchFilters) -> SearchFilters {
+    if !extra.file_types.is_empty() {
+        base.file_types.extend(extra.file_types);
+    }
+    if extra.size_range.is_some() {
+        base.size_range = extra.size_range;
+    }
+    if extra.date_range.is_some() {
+        base.date_range = extra.date_range;
+    }
+    if extra.location.is_some() {
+        base.location = extra.location;
+    }
+    base
+}
+
+fn apply_search_filters_to_results(
+    results: Vec<HybridSearchResult>,
+    filters: &SearchFilters,
+) -> Vec<HybridSearchResult> {
+    let type_filters: std::collections::HashSet<String> = filters
+        .file_types
+        .iter()
+        .filter_map(|t| normalize_extension(t))
+        .collect();
+
+    let location_filter = filters.location.as_ref().map(|loc| {
+        let normalized = loc.replace('/', &std::path::MAIN_SEPARATOR.to_string());
+        normalized.to_lowercase()
+    });
+
+    results
+        .into_iter()
+        .filter(|r| {
+            if !type_filters.is_empty() {
+                let ext = r
+                    .extension
+                    .as_ref()
+                    .and_then(|e| normalize_extension(e));
+                if ext.map(|e| !type_filters.contains(&e)).unwrap_or(true) {
+                    return false;
+                }
+            }
+
+            if let Some((min, max)) = filters.size_range {
+                let size = r.size_bytes.max(0) as u64;
+                if size < min || size > max {
+                    return false;
+                }
+            }
+
+            if let Some((start, end)) = &filters.date_range {
+                let ts = r.modified_at;
+                let start_ts = start.timestamp();
+                let end_ts = end.timestamp();
+                if ts < start_ts || ts > end_ts {
+                    return false;
+                }
+            }
+
+            if let Some(ref loc) = location_filter {
+                let path = r.path.to_lowercase();
+                if path.contains(std::path::MAIN_SEPARATOR) {
+                    if !path.starts_with(loc) && !path.contains(loc) {
+                        return false;
+                    }
+                } else if !path.contains(loc) {
+                    return false;
+                }
+            }
+
+            true
+        })
+        .collect()
+}
+
+fn hydrate_hybrid_results(
+    conn: &Connection,
+    results: &mut [HybridSearchResult],
+) -> Result<(), String> {
+    for result in results.iter_mut() {
+        let row = conn.query_row(
+            "SELECT size_bytes, modified_at, extension FROM files WHERE path = ?1",
+            [&result.path],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0).unwrap_or(0),
+                    row.get::<_, i64>(1).unwrap_or(0),
+                    row.get::<_, Option<String>>(2).ok().flatten(),
+                ))
+            },
+        );
+
+        if let Ok((size, modified, extension)) = row {
+            result.size_bytes = size;
+            result.modified_at = modified;
+            if result.extension.is_none() {
+                result.extension = extension;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -346,12 +539,12 @@ pub fn search_keyword(
     app: AppHandle,
     state: State<Arc<IndexManager>>,
     query: String,
-    _filters: Option<SearchFilters>,
+    filters: SearchFilters,
 ) -> Result<Vec<SearchResult>, String> {
-    // 0. Pre-process query for advanced syntax
-    let advanced_query = parse_advanced_query(&query);
+    let (keyword_query, parsed_filters) = parse_advanced_query(&query);
+    let merged_filters = merge_search_filters(filters, parsed_filters);
 
-    let mut search_query = advanced_query.clone();
+    let mut search_query = keyword_query.clone();
     let mut tags_to_filter = Vec::new();
 
     let re_tag = Regex::new(r"(?i)\btag:(\w+)").unwrap();
@@ -363,14 +556,13 @@ pub fn search_keyword(
 
     // 1. If tags present, find allowed paths
     let allowed_paths: Option<Vec<String>> = if !tags_to_filter.is_empty() {
-        let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-        let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+        let conn = crate::db::get_conn(&app)?;
 
         let mut file_ids: Option<std::collections::HashSet<i64>> = None;
 
         for tag in tags_to_filter {
             let mut stmt = conn
-                .prepare("SELECT file_id FROM tags WHERE tag LIKE ?1")
+                .prepare_cached("SELECT file_id FROM tags WHERE tag LIKE ?1")
                 .map_err(|e| e.to_string())?;
             let ids: std::collections::HashSet<i64> = stmt
                 .query_map([tag], |row| row.get(0))
@@ -415,26 +607,85 @@ pub fn search_keyword(
     };
 
     // 2. Perform Search
-    let results_res = if search_query.trim().is_empty() {
-        if let Some(paths) = &allowed_paths {
-             state.search("*", 50)
-        } else {
-             Ok(vec![])
-        }
-    } else {
-         state.search(&search_query, 50)
-    };
+    let has_filters = !merged_filters.file_types.is_empty()
+        || merged_filters.size_range.is_some()
+        || merged_filters.date_range.is_some()
+        || merged_filters.location.is_some();
+
+    if search_query.trim().is_empty() && allowed_paths.is_none() && !has_filters {
+        return Ok(vec![]);
+    }
+
+    let results_res = state.search(&search_query, 200);
     
     let mut results = results_res.map_err(|e| e.to_string())?;
     
     // 3. Filter by paths if tags were used
-    if let Some(paths) = allowed_paths {
-        let set: std::collections::HashSet<String> = paths.into_iter().collect();
-         results = results
-            .into_iter()
-            .filter(|r| set.contains(&r.path))
-            .collect();
-    }
+    let allowed_set: Option<std::collections::HashSet<String>> =
+        allowed_paths.map(|paths| paths.into_iter().collect());
+
+    let type_filters: std::collections::HashSet<String> = merged_filters
+        .file_types
+        .iter()
+        .filter_map(|t| normalize_extension(t))
+        .collect();
+
+    let location_filter = merged_filters.location.as_ref().map(|loc| {
+        let normalized = loc.replace('/', &std::path::MAIN_SEPARATOR.to_string());
+        normalized.to_lowercase()
+    });
+
+    results = results
+        .into_iter()
+        .filter(|r| {
+            if let Some(ref set) = allowed_set {
+                if !set.contains(&r.path) {
+                    return false;
+                }
+            }
+
+            if !type_filters.is_empty() {
+                let ext = r
+                    .extension
+                    .as_ref()
+                    .and_then(|e| normalize_extension(e));
+                if ext.map(|e| !type_filters.contains(&e)).unwrap_or(true) {
+                    return false;
+                }
+            }
+
+            if let Some((min, max)) = merged_filters.size_range {
+                let size = r.size_bytes.max(0) as u64;
+                if size < min || size > max {
+                    return false;
+                }
+            }
+
+            if let Some((start, end)) = &merged_filters.date_range {
+                let ts = r.modified_at;
+                let start_ts = start.timestamp();
+                let end_ts = end.timestamp();
+                if ts < start_ts || ts > end_ts {
+                    return false;
+                }
+            }
+
+            if let Some(ref loc) = location_filter {
+                let path = r.path.to_lowercase();
+                if path.contains(std::path::MAIN_SEPARATOR) {
+                    if !path.starts_with(loc) && !path.contains(loc) {
+                        return false;
+                    }
+                } else if !path.contains(loc) {
+                    return false;
+                }
+            }
+
+            true
+        })
+        .collect();
+
+    results.truncate(50);
     
     // 4. Save to History (Async or just ignore error)
     if !query.trim().is_empty() {
@@ -442,8 +693,8 @@ pub fn search_keyword(
         let query_clone = query.clone();
         let count = results.len() as i64;
         std::thread::spawn(move || {
-             let db_path = app_handle.path().app_data_dir().unwrap().join("filenova.db");
-             if let Ok(conn) = Connection::open(db_path) {
+             let pool = app_handle.state::<crate::db::DbPool>();
+             if let Ok(conn) = pool.main.get() {
                  let _ = conn.execute(
                      "INSERT INTO search_history (query, search_type, result_count, searched_at) VALUES (?1, 'keyword', ?2, datetime('now'))",
                      params![query_clone, count]
@@ -469,29 +720,33 @@ pub struct FileTypeStats {
     pub count: u64,
 }
 
+fn category_case_sql() -> &'static str {
+    "CASE \
+        WHEN extension IN ('mp4', 'mkv', 'avi', 'mov', 'webm') THEN 'Videos' \
+        WHEN extension IN ('jpg', 'jpeg', 'png', 'gif', 'bmp', 'svg', 'webp') THEN 'Images' \
+        WHEN extension IN ('pdf', 'doc', 'docx', 'txt', 'md', 'rtf', 'odt') THEN 'Documents' \
+        WHEN extension IN ('zip', 'tar', 'gz', '7z', 'rar', 'iso') THEN 'Archives' \
+        WHEN extension IN ('rs', 'ts', 'tsx', 'js', 'jsx', 'py', 'java', 'c', 'cpp', 'html', 'css', 'json', 'toml', 'yaml') THEN 'Code' \
+        ELSE 'Other' \
+     END"
+}
+
 #[tauri::command]
 pub fn get_storage_breakdown(app: AppHandle) -> Result<StorageBreakdown, String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(&app)?;
 
-    let mut stmt = conn.prepare(
-        "SELECT 
-            CASE 
-                WHEN extension IN ('mp4', 'mkv', 'avi', 'mov', 'webm') THEN 'Video'
-                WHEN extension IN ('jpg', 'jpeg', 'png', 'gif', 'bmp', 'svg', 'webp') THEN 'Image'
-                WHEN extension IN ('mp3', 'wav', 'flac', 'aac', 'ogg') THEN 'Audio'
-                WHEN extension IN ('pdf', 'doc', 'docx', 'txt', 'md', 'rtf', 'odt') THEN 'Document'
-                WHEN extension IN ('zip', 'tar', 'gz', '7z', 'rar', 'iso') THEN 'Archive'
-                WHEN extension IN ('exe', 'msi', 'dll', 'bin') THEN 'Binary'
-                WHEN extension IN ('rs', 'ts', 'tsx', 'js', 'jsx', 'py', 'java', 'c', 'cpp', 'html', 'css', 'json', 'toml', 'yaml') THEN 'Code'
-                ELSE 'Other'
-            END as category,
-            SUM(size_bytes) as total_size,
-            COUNT(*) as count
-         FROM files
-         WHERE is_directory = 0
-         GROUP BY category"
-    ).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT 
+                {category_case} as category,
+                SUM(size_bytes) as total_size,
+                COUNT(*) as count
+             FROM files
+             WHERE is_directory = 0
+             GROUP BY category",
+            category_case = category_case_sql()
+        ))
+        .map_err(|e| e.to_string())?;
 
     let rows = stmt
         .query_map([], |row| {
@@ -524,11 +779,10 @@ pub fn get_storage_breakdown(app: AppHandle) -> Result<StorageBreakdown, String>
 
 #[tauri::command]
 pub fn get_largest_files(app: AppHandle, limit: usize) -> Result<Vec<FileEntry>, String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(&app)?;
 
     let mut stmt = conn
-        .prepare(
+        .prepare_cached(
             "SELECT name, path, size_bytes, modified_at 
          FROM files 
          WHERE is_directory = 0 
@@ -564,18 +818,18 @@ pub struct FolderSize {
     pub name: String,
     pub path: String,
     pub size: u64,
+    pub category: String,
 }
 
 #[tauri::command]
 pub fn get_folder_sizes(app: AppHandle, path: String) -> Result<Vec<FolderSize>, String> {
-    let folders = fs::read_dir(&path)
+    let folders = fs::read_dir(safe_path(Path::new(&path)))
         .map_err(|e| e.to_string())?
         .filter_map(|e| e.ok())
         .filter(|e| e.metadata().map(|m| m.is_dir()).unwrap_or(false))
         .collect::<Vec<_>>();
 
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(&app)?;
 
     // Get all descendant folder sizes
     // Use likelihood that path separator is platform specific
@@ -586,7 +840,7 @@ pub fn get_folder_sizes(app: AppHandle, path: String) -> Result<Vec<FolderSize>,
     };
 
     let mut stmt = conn
-        .prepare(
+        .prepare_cached(
             "SELECT parent_path, SUM(size_bytes) 
          FROM files 
          WHERE parent_path LIKE ?1 || '%' 
@@ -625,10 +879,27 @@ pub fn get_folder_sizes(app: AppHandle, path: String) -> Result<Vec<FolderSize>,
             }
         }
 
+        let category_query = format!(
+            "SELECT {category_case} as category, SUM(size_bytes) as total_size\
+             FROM files\
+             WHERE is_directory = 0 AND path LIKE ?1 || '%'\
+             GROUP BY category\
+             ORDER BY total_size DESC\
+             LIMIT 1",
+            category_case = category_case_sql()
+        );
+
+        let category = conn
+            .query_row(&category_query, [entry_path_str.as_str()], |row| row.get(0))
+            .optional()
+            .unwrap_or(None)
+            .unwrap_or_else(|| "Other".to_string());
+
         result.push(FolderSize {
             name,
             path: entry_path_str,
             size,
+            category,
         });
     }
 
@@ -699,11 +970,10 @@ pub fn get_duplicate_scan_status(state: State<DuplicateScanState>) -> DuplicateS
 
 #[tauri::command]
 pub fn get_duplicate_summary(app: AppHandle) -> Result<DuplicateSummary, String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(&app)?;
 
     let mut stmt = conn
-        .prepare(
+        .prepare_cached(
             "SELECT
                 COUNT(*) as total_groups,
                 COALESCE(SUM(total_wasted_bytes), 0) as total_wasted,
@@ -736,16 +1006,15 @@ pub fn get_duplicates(
     offset: Option<i64>,
     limit: Option<i64>,
 ) -> Result<Vec<DuplicateGroup>, String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(&app)?;
 
     let limit = limit.unwrap_or(50);
     let offset = offset.unwrap_or(0);
 
     let groups: Vec<(i64, String, Option<String>, i64, i64)> = if let Some(ref gt) = group_type {
         let mut stmt = conn
-            .prepare(
-                "SELECT id, group_type, hash_blake3, file_count, total_wasted_bytes
+            .prepare_cached(
+            "SELECT id, group_type, hash_blake3, file_count, total_wasted_bytes
                  FROM duplicate_groups
                  WHERE group_type = ?1
                  ORDER BY total_wasted_bytes DESC
@@ -768,8 +1037,8 @@ pub fn get_duplicates(
         rows
     } else {
         let mut stmt = conn
-            .prepare(
-                "SELECT id, group_type, hash_blake3, file_count, total_wasted_bytes
+            .prepare_cached(
+            "SELECT id, group_type, hash_blake3, file_count, total_wasted_bytes
                  FROM duplicate_groups
                  ORDER BY total_wasted_bytes DESC
                  LIMIT ?1 OFFSET ?2",
@@ -795,8 +1064,8 @@ pub fn get_duplicates(
 
     for (group_id, group_type, hash_blake3, file_count, total_wasted_bytes) in groups {
         let mut file_stmt = conn
-            .prepare(
-                "SELECT dgf.id, dgf.file_id, f.name, f.path, f.size_bytes, f.modified_at, f.parent_path
+            .prepare_cached(
+            "SELECT dgf.id, dgf.file_id, f.name, f.path, f.size_bytes, f.modified_at, f.parent_path
                  FROM duplicate_group_files dgf
                  JOIN files f ON f.id = dgf.file_id
                  WHERE dgf.group_id = ?1
@@ -834,25 +1103,83 @@ pub fn get_duplicates(
 }
 
 #[tauri::command]
+pub fn get_duplicate_group_files(
+    app: AppHandle,
+    group_id: i64,
+) -> Result<Vec<FileEntry>, String> {
+    let conn = crate::db::get_conn(&app)?;
+
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT f.name, f.path, f.is_directory, f.size_bytes, f.modified_at
+             FROM duplicate_group_files dgf
+             JOIN files f ON f.id = dgf.file_id
+             WHERE dgf.group_id = ?1
+             ORDER BY f.modified_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([group_id], |row| {
+            Ok(FileEntry {
+                name: row.get(0)?,
+                path: row.get(1)?,
+                is_directory: row.get::<_, i64>(2).unwrap_or(0) != 0,
+                size: row.get::<_, i64>(3).unwrap_or(0) as u64,
+                modified_at: row.get::<_, i64>(4).unwrap_or(0) as u64,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        if let Ok(entry) = row {
+            result.push(entry);
+        }
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
 pub fn delete_duplicate_files(
     app: AppHandle,
-    file_paths: Vec<String>,
-    keep_path: String,
+    file_ids: Vec<i64>,
+    keep_file_id: i64,
 ) -> Result<BatchResult, String> {
-    if file_paths.contains(&keep_path) {
+    if file_ids.contains(&keep_file_id) {
         return Err("Cannot delete the file marked to keep".into());
     }
 
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(&app)?;
 
     let batch_id = uuid::Uuid::new_v4().to_string();
     let mut bytes_recovered = 0u64;
     let mut files_processed = 0u64;
 
-    for path in &file_paths {
-        let size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-        crate::trash::move_to_trash(&app, &conn, path, &batch_id)?;
+    let keep_path: String = conn
+        .query_row(
+            "SELECT path FROM files WHERE id = ?1",
+            [keep_file_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    for file_id in &file_ids {
+        let path: String = conn
+            .query_row(
+                "SELECT path FROM files WHERE id = ?1",
+                [file_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+
+        if path == keep_path {
+            continue;
+        }
+
+        let size = fs::metadata(safe_path(Path::new(&path))).map(|m| m.len()).unwrap_or(0);
+        crate::trash::move_to_trash(&app, &conn, &path, &batch_id)?;
         bytes_recovered += size;
         files_processed += 1;
     }
@@ -889,14 +1216,57 @@ pub fn delete_duplicate_files(
 
 #[tauri::command]
 pub fn undo_batch(app: AppHandle, batch_id: String) -> Result<Vec<String>, String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(&app)?;
 
-    let restored = crate::trash::restore_from_trash(&app, &conn, &batch_id)?;
+    let mut restored = crate::trash::restore_from_trash(&app, &conn, &batch_id)?;
+    if let Ok(mut moves) = crate::execution::undo_move_batch(&conn, &batch_id) {
+        restored.append(&mut moves);
+    }
 
     let _ = app.emit("duplicates-changed", ());
+    let _ = app.emit("file-changed", ()); // Notify general file changes
 
     Ok(restored)
+}
+
+#[tauri::command]
+pub fn undo_operation(app: AppHandle, batch_id: String) -> Result<(), String> {
+    undo_batch(app, batch_id).map(|_| ())
+}
+
+#[tauri::command]
+pub fn undo_last_operations(app: AppHandle, count: i64) -> Result<Vec<String>, String> {
+    if count <= 0 {
+        return Ok(Vec::new());
+    }
+
+    let conn = crate::db::get_conn(&app)?;
+
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT batch_id, MAX(performed_at) as performed_at
+             FROM operations
+             WHERE undone = 0
+             GROUP BY batch_id
+             ORDER BY performed_at DESC
+             LIMIT ?1",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let batch_ids: Vec<String> = stmt
+        .query_map([count], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let mut undone = Vec::new();
+    for batch_id in batch_ids {
+        if undo_batch(app.clone(), batch_id.clone()).is_ok() {
+            undone.push(batch_id);
+        }
+    }
+
+    Ok(undone)
 }
 
 #[tauri::command]
@@ -904,13 +1274,12 @@ pub fn get_recent_operations(
     app: AppHandle,
     limit: Option<i64>,
 ) -> Result<Vec<OperationBatch>, String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(&app)?;
 
     let limit = limit.unwrap_or(10);
 
     let mut stmt = conn
-        .prepare(
+        .prepare_cached(
             "SELECT batch_id, COUNT(*) as file_count, COALESCE(SUM(file_size), 0) as total_size, MAX(performed_at) as performed_at
              FROM operations
              WHERE operation = 'move_to_trash' AND undone = 0
@@ -937,6 +1306,99 @@ pub fn get_recent_operations(
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OperationHistoryItem {
+    pub batch_id: String,
+    pub operation: String,
+    pub file_count: i64,
+    pub description: String,
+    pub performed_at: String,
+    pub undone: bool,
+}
+
+#[tauri::command]
+pub fn get_operation_history(app: AppHandle) -> Result<Vec<OperationHistoryItem>, String> {
+    let conn = crate::db::get_conn(&app)?;
+
+    let mut stmt = conn.prepare_cached(
+        "SELECT batch_id, operation, COUNT(*) as cnt, MIN(performed_at) as performed_at, MIN(undone) as is_undone
+         FROM operations
+         GROUP BY batch_id
+         ORDER BY performed_at DESC
+         LIMIT 20"
+    ).map_err(|e| e.to_string())?;
+
+    let history = stmt.query_map([], |row| {
+        let batch_id: String = row.get(0)?;
+        let op: String = row.get(1)?;
+        let count: i64 = row.get(2)?;
+        let performed_at: String = row.get(3)?;
+        let undone: bool = row.get(4)?;
+
+        let description = match op.as_str() {
+            "move" => format!("Moved {} files", count),
+            "move_to_trash" => format!("Moved {} files to trash", count),
+            "rename" => format!("Renamed {} files", count), // if we distinguish rename in future
+            _ => format!("{} {} files", op, count), 
+        };
+
+        Ok(OperationHistoryItem {
+            batch_id,
+            operation: op,
+            file_count: count,
+            description,
+            performed_at,
+            undone
+        })
+    }).map_err(|e| e.to_string())?
+    .filter_map(|r| r.ok())
+    .collect();
+
+    Ok(history)
+}
+
+#[tauri::command]
+pub fn redo_batch(app: AppHandle, batch_id: String) -> Result<Vec<String>, String> {
+    let conn = crate::db::get_conn(&app)?;
+
+    let mut redone_paths = Vec::new();
+
+    // Try redo trash
+    if let Ok(mut paths) = crate::trash::redo_trash_batch(&app, &conn, &batch_id) {
+        redone_paths.append(&mut paths);
+    }
+    
+    // Try redo moves
+    if let Ok(mut paths) = crate::execution::redo_move_batch(&conn, &batch_id) {
+        redone_paths.append(&mut paths);
+    }
+
+    let _ = app.emit("duplicates-changed", ());
+    let _ = app.emit("file-changed", ());
+
+    Ok(redone_paths)
+}
+
+#[tauri::command]
+pub fn redo_operation(app: AppHandle, batch_id: String) -> Result<(), String> {
+    redo_batch(app, batch_id).map(|_| ())
+}
+
+#[tauri::command]
+pub fn get_trash_contents(app: AppHandle) -> Result<Vec<crate::trash::TrashItem>, String> {
+    crate::trash::get_trash_items(app)
+}
+
+#[tauri::command]
+pub fn restore_from_trash(app: AppHandle, file_ids: Vec<i64>) -> Result<(), String> {
+    crate::trash::restore_trash_items(app, file_ids)
+}
+
+#[tauri::command]
+pub fn empty_trash(app: AppHandle) -> Result<(), String> {
+    crate::trash::empty_trash_bin(app)
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ActivityEntry {
     pub id: i64,
     pub file_path: String,
@@ -955,8 +1417,7 @@ pub struct ActivityFilters {
 
 #[tauri::command]
 pub fn get_activity_feed(app: AppHandle, filters: ActivityFilters) -> Result<Vec<ActivityEntry>, String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(&app)?;
 
     let mut sql = "SELECT id, file_path, action, detected_at FROM activity WHERE 1=1".to_string();
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -1035,8 +1496,7 @@ pub fn get_activity_feed(app: AppHandle, filters: ActivityFilters) -> Result<Vec
 
 #[tauri::command]
 pub fn get_file_db_id(app: AppHandle, path: String) -> Result<Option<i64>, String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(&app)?;
 
     let id: Option<i64> = conn
         .query_row("SELECT id FROM files WHERE path = ?1", [&path], |row| {
@@ -1053,6 +1513,7 @@ pub fn get_file_db_id(app: AppHandle, path: String) -> Result<Option<i64>, Strin
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[allow(dead_code)]
 pub struct Rule {
     pub id: i64,
     pub name: String,
@@ -1062,65 +1523,7 @@ pub struct Rule {
     pub trigger: String,
 }
 
-#[tauri::command]
-pub fn get_rules(app: AppHandle) -> Result<Vec<Rule>, String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
-    let mut stmt = conn
-        .prepare("SELECT id, name, condition_json, action_json, enabled, trigger FROM rules ORDER BY created_at DESC")
-        .map_err(|e| e.to_string())?;
-
-    let rules = stmt
-        .query_map([], |row| {
-            Ok(Rule {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                condition_json: row.get(2)?,
-                action_json: row.get(3)?,
-                enabled: row.get(4)?,
-                trigger: row.get(5)?,
-            })
-        })
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    Ok(rules)
-}
-
-#[tauri::command]
-pub fn save_rule(app: AppHandle, rule: Rule) -> Result<(), String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
-
-    if rule.id > 0 {
-        // Update
-        conn.execute(
-            "UPDATE rules SET name = ?1, condition_json = ?2, action_json = ?3, enabled = ?4, trigger = ?5 WHERE id = ?6",
-            params![rule.name, rule.condition_json, rule.action_json, rule.enabled, rule.trigger, rule.id],
-        ).map_err(|e| e.to_string())?;
-    } else {
-        // Insert
-        conn.execute(
-            "INSERT INTO rules (name, condition_json, action_json, enabled, trigger, created_at) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))",
-            params![rule.name, rule.condition_json, rule.action_json, rule.enabled, rule.trigger],
-        ).map_err(|e| e.to_string())?;
-    }
-
-    Ok(())
-}
-
-#[tauri::command]
-pub fn delete_rule(app: AppHandle, rule_id: i64) -> Result<(), String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
-
-    conn.execute("DELETE FROM rules WHERE id = ?1", [rule_id])
-        .map_err(|e| e.to_string())?;
-
-    Ok(())
-}
 
 // ---------------------------------------------------------------------------
 // Stage 5: Content Extraction & Semantic Search Commands
@@ -1148,8 +1551,14 @@ pub fn start_content_extraction(
     app: AppHandle,
     state: State<ExtractionState>,
     vector_store: State<Arc<VectorStore>>,
+    file_ids: Option<Vec<i64>>,
 ) {
-    extraction::start_extraction(app, state.inner().clone(), Arc::clone(&vector_store));
+    extraction::start_extraction(
+        app,
+        state.inner().clone(),
+        Arc::clone(&vector_store),
+        file_ids,
+    );
 }
 
 #[tauri::command]
@@ -1169,8 +1578,7 @@ pub fn get_extraction_status(state: State<ExtractionState>) -> ExtractionStatus 
 
 #[tauri::command]
 pub fn get_extraction_stats(app: AppHandle) -> Result<ExtractionStats, String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(&app)?;
 
     let total: u64 = conn
         .query_row(
@@ -1182,7 +1590,7 @@ pub fn get_extraction_stats(app: AppHandle) -> Result<ExtractionStats, String> {
 
     let extracted: u64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM files WHERE content_extracted = TRUE AND is_directory = 0",
+            "SELECT COUNT(*) FROM files WHERE extraction_completed = TRUE AND is_directory = 0",
             [],
             |r| r.get::<_, i64>(0),
         )
@@ -1220,12 +1628,31 @@ pub async fn search_semantic(
     query: String,
     limit: Option<usize>,
 ) -> Result<Vec<HybridSearchResult>, String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(&app)?;
     let config = EmbeddingConfig::from_settings(&conn);
     let limit = limit.unwrap_or(20);
 
-    crate::semantic_search::search_semantic_only(&vector_store, &config, &query, limit).await
+    let mut results =
+        crate::semantic_search::search_semantic_only(&vector_store, &config, &query, limit).await?;
+
+    hydrate_hybrid_results(&conn, &mut results)?;
+
+    if !query.trim().is_empty() {
+        let app_handle = app.clone();
+        let query_clone = query.clone();
+        let count = results.len() as i64;
+        std::thread::spawn(move || {
+            let pool = app_handle.state::<crate::db::DbPool>();
+            if let Ok(conn) = pool.main.get() {
+                let _ = conn.execute(
+                    "INSERT INTO search_history (query, search_type, result_count, searched_at) VALUES (?1, 'semantic', ?2, datetime('now'))",
+                    params![query_clone, count],
+                );
+            }
+        });
+    }
+
+    Ok(results)
 }
 
 #[tauri::command]
@@ -1235,9 +1662,9 @@ pub async fn search_hybrid(
     app: AppHandle,
     query: String,
     limit: Option<usize>,
+    filters: SearchFilters,
 ) -> Result<Vec<HybridSearchResult>, String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(&app)?;
     let embed_config = EmbeddingConfig::from_settings(&conn);
     let search_config = crate::semantic_search::SearchConfig {
         keyword_limit: limit.unwrap_or(50),
@@ -1245,20 +1672,40 @@ pub async fn search_hybrid(
         ..Default::default()
     };
 
-    crate::semantic_search::search_hybrid(
+    let mut results = crate::semantic_search::search_hybrid(
         &index_manager,
         &vector_store,
         &embed_config,
         &query,
         &search_config,
     )
-    .await
+    .await?;
+
+    hydrate_hybrid_results(&conn, &mut results)?;
+
+    let results = apply_search_filters_to_results(results, &filters);
+
+    if !query.trim().is_empty() {
+        let app_handle = app.clone();
+        let query_clone = query.clone();
+        let count = results.len() as i64;
+        std::thread::spawn(move || {
+            let pool = app_handle.state::<crate::db::DbPool>();
+            if let Ok(conn) = pool.main.get() {
+                let _ = conn.execute(
+                    "INSERT INTO search_history (query, search_type, result_count, searched_at) VALUES (?1, 'hybrid', ?2, datetime('now'))",
+                    params![query_clone, count],
+                );
+            }
+        });
+    }
+
+    Ok(results)
 }
 
 #[tauri::command]
 pub async fn check_ai_status(app: AppHandle) -> Result<AiStatus, String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(&app)?;
     let config = EmbeddingConfig::from_settings(&conn);
 
     let is_healthy = crate::embeddings::check_provider_health(&config)
@@ -1287,7 +1734,17 @@ pub async fn get_tags(app: AppHandle, file_id: i64) -> Result<Vec<Tag>, String> 
 }
 
 #[tauri::command]
+pub async fn get_ai_tags(app: AppHandle, file_id: i64) -> Result<Vec<Tag>, String> {
+    tagging::get_tags_for_file(&app, file_id).await
+}
+
+#[tauri::command]
 pub async fn add_tag(app: AppHandle, file_id: i64, tag: String) -> Result<(), String> {
+    tagging::add_tag(&app, file_id, tag, "user".to_string(), 1.0).await
+}
+
+#[tauri::command]
+pub async fn add_user_tag(app: AppHandle, file_id: i64, tag: String) -> Result<(), String> {
     tagging::add_tag(&app, file_id, tag, "user".to_string(), 1.0).await
 }
 
@@ -1341,7 +1798,7 @@ fn build_tree(path: &Path, current_depth: usize, max_depth: usize) -> DirectoryN
     let path_str = path.to_string_lossy().to_string();
 
     if !path.is_dir() {
-        let size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let size = fs::metadata(safe_path(path)).map(|m| m.len()).unwrap_or(0);
         return DirectoryNode {
             name,
             path: path_str,
@@ -1367,7 +1824,7 @@ fn build_tree(path: &Path, current_depth: usize, max_depth: usize) -> DirectoryN
     let mut total_size = 0;
     let mut total_count = 0;
 
-    if let Ok(entries) = fs::read_dir(path) {
+    if let Ok(entries) = fs::read_dir(safe_path(path)) {
         for entry in entries.flatten() {
             let child_node = build_tree(&entry.path(), current_depth + 1, max_depth);
             total_size += child_node.size;
@@ -1409,6 +1866,142 @@ pub async fn get_directory_tree(path: String, max_depth: usize) -> Result<Direct
     Ok(result)
 }
 
+// ============================================================================
+// Stage 10: File Preview & Power Features
+// ============================================================================
+
+#[tauri::command]
+pub async fn generate_file_preview(
+    app_handle: AppHandle,
+    file_id: i64,
+    preview_type: String,
+) -> Result<crate::preview::FilePreview, String> {
+    let conn = crate::db::get_preview_conn(&app_handle)?;
+
+    crate::preview::generate_file_preview(&conn, file_id, &preview_type)
+}
+
+#[tauri::command]
+pub async fn get_audio_waveform(path: String) -> Result<Vec<f32>, String> {
+    crate::preview::get_audio_waveform(&path)
+}
+
+#[tauri::command]
+pub async fn extract_pdf_preview(path: String, page: i32) -> Result<Vec<u8>, String> {
+    crate::preview::extract_pdf_preview(&path, page)
+}
+
+#[tauri::command]
+pub async fn get_video_thumbnail(path: String) -> Result<Vec<u8>, String> {
+    crate::preview::get_video_thumbnail(&path)
+}
+
+#[tauri::command]
+pub async fn get_bookmarks(app_handle: AppHandle) -> Result<Vec<crate::preview::Bookmark>, String> {
+    let conn = crate::db::get_preview_conn(&app_handle)?;
+
+    crate::preview::get_bookmarks(&conn)
+}
+
+#[tauri::command]
+pub async fn add_bookmark(
+    app_handle: AppHandle,
+    path: String,
+    name: String,
+) -> Result<(), String> {
+    let conn = crate::db::get_preview_conn(&app_handle)?;
+
+    crate::preview::add_bookmark(&conn, &path, &name)
+}
+
+#[tauri::command]
+pub async fn remove_bookmark(app_handle: AppHandle, path: String) -> Result<(), String> {
+    let conn = crate::db::get_preview_conn(&app_handle)?;
+
+    crate::preview::remove_bookmark(&conn, &path)
+}
+
+#[tauri::command]
+pub async fn reorder_bookmarks(
+    app_handle: AppHandle,
+    ordered_paths: Vec<String>,
+) -> Result<(), String> {
+    let conn = crate::db::get_preview_conn(&app_handle)?;
+
+    crate::preview::reorder_bookmarks(&conn, &ordered_paths)
+}
+
+#[tauri::command]
+pub async fn get_pinned_files(app_handle: AppHandle) -> Result<Vec<String>, String> {
+    let conn = crate::db::get_preview_conn(&app_handle)?;
+
+    crate::preview::get_pinned_files(&conn)
+}
+
+#[tauri::command]
+pub async fn toggle_pin_file(app_handle: AppHandle, path: String) -> Result<bool, String> {
+    let conn = crate::db::get_preview_conn(&app_handle)?;
+
+    crate::preview::toggle_pin_file(&conn, &path)
+}
+
+#[tauri::command]
+pub async fn get_recent_files(
+    app_handle: AppHandle,
+    limit: usize,
+) -> Result<Vec<FileEntry>, String> {
+    let conn = crate::db::get_preview_conn(&app_handle)?;
+
+    crate::preview::get_recent_files(&conn, limit)
+}
+
+#[tauri::command]
+pub async fn record_file_access(app_handle: AppHandle, file_id: i64) -> Result<(), String> {
+    let conn = crate::db::get_preview_conn(&app_handle)?;
+
+    crate::preview::record_file_access(&conn, file_id)
+}
+
+#[tauri::command]
+pub async fn save_workspace(
+    app_handle: AppHandle,
+    name: String,
+    config: String,
+) -> Result<i64, String> {
+    let conn = crate::db::get_preview_conn(&app_handle)?;
+
+    crate::preview::save_workspace(&conn, &name, &config)
+}
+
+#[tauri::command]
+pub async fn load_workspace(
+    app_handle: AppHandle,
+    id: i64,
+) -> Result<crate::preview::WorkspaceConfig, String> {
+    let conn = crate::db::get_preview_conn(&app_handle)?;
+
+    crate::preview::load_workspace(&conn, id)
+}
+
+#[tauri::command]
+pub async fn get_workspaces(
+    app_handle: AppHandle,
+) -> Result<Vec<crate::preview::Workspace>, String> {
+    let conn = crate::db::get_preview_conn(&app_handle)?;
+
+    crate::preview::get_workspaces(&conn)
+}
+
+// ---------------------------------------------------------------------------
+// Stage 11: Disk Space Check
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn check_disk_space(path: String) -> Result<crate::error_handling::DiskSpaceStatus, String> {
+    let p = std::path::PathBuf::from(&path);
+    crate::error_handling::check_disk_space(&p)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1422,16 +2015,33 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_advanced_query() {
-        assert_eq!(parse_advanced_query("test type:pdf"), "test extension:pdf");
-        assert_eq!(
-            parse_advanced_query("size:>10mb"),
-            "size_bytes:{10485760 TO *}"
-        );
-        assert_eq!(parse_advanced_query("size:<1kb"), "size_bytes:{* TO 1024}");
-        // Mixed
-        let q = parse_advanced_query("vacation type:jpg size:>5mb");
-        assert!(q.contains("extension:jpg"));
-        assert!(q.contains("size_bytes:{5242880 TO *}"));
+    fn test_parse_advanced_query_type() {
+        let (text, filters) = parse_advanced_query("test type:pdf");
+        assert_eq!(text, "test");
+        assert!(filters.file_types.contains(&"pdf".to_string()));
+    }
+
+    #[test]
+    fn test_parse_advanced_query_size_gt() {
+        let (_text, filters) = parse_advanced_query("size:>10mb");
+        assert!(filters.size_range.is_some());
+        let (min, _max) = filters.size_range.unwrap();
+        assert_eq!(min, 10485760);
+    }
+
+    #[test]
+    fn test_parse_advanced_query_size_lt() {
+        let (_text, filters) = parse_advanced_query("size:<1kb");
+        assert!(filters.size_range.is_some());
+        let (_min, max) = filters.size_range.unwrap();
+        assert_eq!(max, 1024);
+    }
+
+    #[test]
+    fn test_parse_advanced_query_mixed() {
+        let (text, filters) = parse_advanced_query("vacation type:jpg size:>5mb");
+        assert_eq!(text, "vacation");
+        assert!(filters.file_types.contains(&"jpg".to_string()));
+        assert!(filters.size_range.is_some());
     }
 }

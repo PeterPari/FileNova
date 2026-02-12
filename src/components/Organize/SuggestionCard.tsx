@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import SuggestionPreview from './SuggestionPreview';
 import SuggestionEditor from './SuggestionEditor';
 
@@ -24,6 +23,7 @@ export interface Suggestion {
     confidence: number;
     status: string;
     created_at: string;
+    total_size_bytes?: number | null;
 }
 
 interface SuggestionCardProps {
@@ -42,6 +42,18 @@ const SuggestionCard: React.FC<SuggestionCardProps> = ({ suggestion, onAccept, o
         if (score >= 0.8) return 'bg-green-500 text-white';
         if (score >= 0.5) return 'bg-yellow-500 text-black';
         return 'bg-red-500 text-white';
+    };
+
+    const formatSize = (bytes?: number | null) => {
+        if (!bytes || bytes <= 0) return '—';
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let size = bytes;
+        let unitIndex = 0;
+        while (size >= 1024 && unitIndex < units.length - 1) {
+            size /= 1024;
+            unitIndex++;
+        }
+        return `${size.toFixed(1)} ${units[unitIndex]}`;
     };
 
     const Icon = () => {
@@ -83,6 +95,9 @@ const SuggestionCard: React.FC<SuggestionCardProps> = ({ suggestion, onAccept, o
             <div className="mt-4 flex gap-3 text-xs text-gray-300 pl-2">
                 <span className="bg-gray-700/50 px-2 py-1 rounded border border-gray-600">
                     {suggestion.file_count} files
+                </span>
+                <span className="bg-gray-700/50 px-2 py-1 rounded border border-gray-600">
+                    {formatSize(suggestion.total_size_bytes)} total
                 </span>
                 <span className="bg-gray-700/50 px-2 py-1 rounded border border-gray-600 capitalize">
                     {suggestion.category}

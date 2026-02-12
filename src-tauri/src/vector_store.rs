@@ -22,6 +22,7 @@ pub struct VectorSearchResult {
     pub file_path: String,
     pub chunk_text: String,
     pub chunk_index: u32,
+    pub char_offset: u32,
     pub distance: f32,
 }
 
@@ -44,6 +45,7 @@ impl VectorStore {
             Field::new("file_path", DataType::Utf8, false),
             Field::new("chunk_index", DataType::Int32, false),
             Field::new("chunk_text", DataType::Utf8, false),
+            Field::new("char_offset", DataType::Int32, false),
             Field::new(
                 "vector",
                 DataType::FixedSizeList(
@@ -76,8 +78,11 @@ impl VectorStore {
                 let schema = table.schema().await.map_err(|e| format!("Failed to get schema: {}", e))?;
                 let mut valid = false;
 
-                if let Some(field) = schema.field_with_name("vector").ok() {
-                    if let DataType::FixedSizeList(_, size) = field.data_type() {
+                if let (Ok(vector_field), Ok(_offset_field)) = (
+                    schema.field_with_name("vector"),
+                    schema.field_with_name("char_offset"),
+                ) {
+                    if let DataType::FixedSizeList(_, size) = vector_field.data_type() {
                         if *size == dimensions as i32 {
                             valid = true;
                         }
@@ -133,6 +138,7 @@ impl VectorStore {
         let file_ids: Vec<i64> = chunks.iter().map(|c| c.file_id).collect();
         let file_paths: Vec<&str> = chunks.iter().map(|c| c.file_path.as_str()).collect();
         let chunk_indices: Vec<i32> = chunks.iter().map(|c| c.chunk_index as i32).collect();
+        let char_offsets: Vec<i32> = chunks.iter().map(|c| c.char_offset as i32).collect();
         let chunk_texts: Vec<&str> = chunks.iter().map(|c| c.chunk_text.as_str()).collect();
 
         // Build the vector column as FixedSizeList<Float32>
@@ -165,6 +171,7 @@ impl VectorStore {
                 Arc::new(StringArray::from(file_paths)),
                 Arc::new(Int32Array::from(chunk_indices)),
                 Arc::new(StringArray::from(chunk_texts)),
+                Arc::new(Int32Array::from(char_offsets)),
                 Arc::new(vector_array) as Arc<dyn Array>,
             ],
         )
@@ -184,6 +191,7 @@ impl VectorStore {
     // Note: remove_file_embeddings needs dimensions just to get the table handle
     // We can either pass it or try to open "embeddings" blindly. 
     // Since we delete by file_id, we can probably just open the table directly.
+    #[allow(dead_code)]
     pub async fn remove_file_embeddings(&self, file_id: i64) -> Result<(), String> {
         // Blindly try to open table. if it doesn't exist, nothing to delete.
          let existing = self.db.open_table("embeddings").execute().await;
@@ -240,6 +248,11 @@ impl VectorStore {
                 .and_then(|c| c.as_any().downcast_ref::<Int32Array>())
                 .ok_or("Missing chunk_index column")?;
 
+            let char_offsets = batch
+                .column_by_name("char_offset")
+                .and_then(|c| c.as_any().downcast_ref::<Int32Array>())
+                .ok_or("Missing char_offset column")?;
+
             let distances = batch
                 .column_by_name("_distance")
                 .and_then(|c| c.as_any().downcast_ref::<Float32Array>())
@@ -251,6 +264,7 @@ impl VectorStore {
                     file_path: file_paths.value(i).to_string(),
                     chunk_text: chunk_texts.value(i).to_string(),
                     chunk_index: chunk_indices.value(i) as u32,
+                    char_offset: char_offsets.value(i) as u32,
                     distance: distances.value(i),
                 });
             }

@@ -1,5 +1,6 @@
 import { useFileStore } from '../store/fileStore';
-import { File, Folder, Search, Scale, Zap, Sparkles } from 'lucide-react';
+import { File, Folder, Search, Scale, Zap, Sparkles, ArrowUpRight } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 
 export const SemanticSearch = () => {
     const { searchResults, searchQuery, isSearching, selectFile } = useFileStore();
@@ -17,6 +18,42 @@ export const SemanticSearch = () => {
             size: 0, // Placeholder
             modified_at: 0 // Placeholder
         });
+    };
+
+    const handleJumpToSection = async (path: string, charOffset?: number) => {
+        await invoke('plugin:opener|open_path', { path, with: null });
+        if (typeof charOffset === 'number') {
+            try {
+                await navigator.clipboard.writeText(charOffset.toString());
+            } catch {
+                // Ignore clipboard errors
+            }
+        }
+    };
+
+    const highlightSnippet = (snippet: string, query: string) => {
+        const terms = query
+            .split(/\s+/)
+            .map((t) => t.trim())
+            .filter(Boolean);
+        if (terms.length === 0) return snippet;
+
+        const pattern = terms
+            .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+            .join('|');
+        const splitRegex = new RegExp(`(${pattern})`, 'gi');
+        const matchRegex = new RegExp(`^(${pattern})$`, 'i');
+        const parts = snippet.split(splitRegex);
+
+        return parts.map((part, idx) =>
+            matchRegex.test(part) ? (
+                <mark key={idx} className="bg-yellow-200/70 dark:bg-yellow-700/40 px-0.5 rounded-sm">
+                    {part}
+                </mark>
+            ) : (
+                <span key={idx}>{part}</span>
+            )
+        );
     };
 
     if (isSearching) {
@@ -94,6 +131,9 @@ export const SemanticSearch = () => {
                                         <span className="text-xs font-medium text-gray-600 dark:text-gray-300">
                                             {Math.round(result.combined_score * 100)}%
                                         </span>
+                                        <span className="text-[10px] uppercase tracking-wide text-gray-400">
+                                            {result.source === 'hybrid' ? 'Hybrid' : result.source === 'semantic' ? 'Semantic' : 'Keyword'}
+                                        </span>
                                     </div>
                                 </div>
 
@@ -103,7 +143,23 @@ export const SemanticSearch = () => {
 
                                 {result.snippet && (
                                     <div className="mt-2 text-sm text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/50 rounded p-2 italic border-l-2 border-purple-300 dark:border-purple-700">
-                                        "...{result.snippet}..."
+                                        "...{highlightSnippet(result.snippet, searchQuery)}..."
+                                    </div>
+                                )}
+                                {typeof result.char_offset === 'number' && (
+                                    <div className="mt-2 flex items-center gap-2 text-xs text-gray-500">
+                                        <span>Offset: {result.char_offset}</span>
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleJumpToSection(result.path, result.char_offset);
+                                            }}
+                                            className="inline-flex items-center gap-1 text-purple-600 hover:text-purple-700"
+                                            title="Open file and copy offset to clipboard"
+                                        >
+                                            <ArrowUpRight size={12} />
+                                            Jump to section
+                                        </button>
                                     </div>
                                 )}
                             </div>

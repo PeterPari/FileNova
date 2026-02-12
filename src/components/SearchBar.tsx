@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Search, X, File, Folder, Clock, ArrowRight } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useFileStore } from '../store/fileStore';
+import { getParentPath } from '../utils/path';
 
 interface SearchResult {
     path: string;
@@ -24,11 +25,19 @@ export const SearchBar = () => {
     const [query, setQuery] = useState('');
     const [results, setResults] = useState<SearchResult[]>([]);
     const [history, setHistory] = useState<SearchHistoryEntry[]>([]);
+    const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
     const [isOpen, setIsOpen] = useState(false);
     const [selectedIndex, setSelectedIndex] = useState(0);
     const inputRef = useRef<HTMLInputElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
-    const { performSearch } = useFileStore();
+    const { performSearch, setCurrentPath, setCurrentView } = useFileStore();
+
+    const emptyFilters = {
+        file_types: [],
+        size_range: null as [number, number] | null,
+        date_range: null as [string, string] | null,
+        location: null as string | null,
+    };
 
     // Debounce search
     useEffect(() => {
@@ -47,6 +56,7 @@ export const SearchBar = () => {
     useEffect(() => {
         if (isOpen && !query) {
             fetchHistory();
+            fetchTags();
         }
     }, [isOpen, query]);
 
@@ -64,10 +74,32 @@ export const SearchBar = () => {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, []);
 
+    useEffect(() => {
+        const handleTagSearch = (event: Event) => {
+            const detail = (event as CustomEvent<{ tag: string }>).detail;
+            if (!detail?.tag) return;
+            setQuery(`tag:${detail.tag}`);
+            setIsOpen(true);
+            inputRef.current?.focus();
+        };
+
+        window.addEventListener('tag-search', handleTagSearch as EventListener);
+        return () => window.removeEventListener('tag-search', handleTagSearch as EventListener);
+    }, []);
+
     const fetchHistory = async () => {
         try {
             const hist = await invoke<SearchHistoryEntry[]>('get_search_history', { limit: 5 });
             setHistory(hist);
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
+    const fetchTags = async () => {
+        try {
+            const tags = await invoke<string[]>('get_all_tags');
+            setTagSuggestions(tags.slice(0, 12));
         } catch (e) {
             console.error(e);
         }
@@ -121,7 +153,7 @@ export const SearchBar = () => {
 
     const search = async (q: string) => {
         try {
-            const res = await invoke<SearchResult[]>('search_keyword', { query: q });
+            const res = await invoke<SearchResult[]>('search_keyword', { query: q, filters: emptyFilters });
             setResults(res);
             setSelectedIndex(0);
             setIsOpen(true);
@@ -131,10 +163,10 @@ export const SearchBar = () => {
     };
 
     const openFile = async (path: string) => {
-        try {
-            await invoke('plugin:opener|open_path', { path, with: null });
-        } catch (e) {
-            console.error("Open file failed:", e);
+        const parent = getParentPath(path);
+        setCurrentView('browser');
+        if (parent !== null) {
+            await setCurrentPath(parent);
         }
         setIsOpen(false);
     };
@@ -155,7 +187,7 @@ export const SearchBar = () => {
     return (
         <div className="relative w-full max-w-xl mx-auto" ref={containerRef}>
             <div className="relative group">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors" size={18} />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted group-focus-within:text-blue-500 transition-colors" size={18} />
                 <input
                     ref={inputRef}
                     type="text"
@@ -167,31 +199,31 @@ export const SearchBar = () => {
                     onFocus={() => setIsOpen(true)}
                     onKeyDown={handleInputKeyDown}
                     placeholder="Search files (Ctrl+P)..."
-                    className="w-full bg-gray-100 dark:bg-gray-800 border border-transparent focus:border-blue-500 dark:focus:border-blue-500 rounded-lg pl-10 pr-10 py-2.5 text-sm focus:ring-2 focus:ring-blue-100 outline-none transition-all shadow-sm"
+                    className="w-full bg-surface border border-base focus:border-blue-500 dark:focus:border-blue-500 rounded-lg pl-10 pr-10 py-2.5 text-sm focus:ring-2 focus:ring-blue-100 outline-none transition-all shadow-sm"
                 />
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1">
                     {query && (
                         <button
                             onClick={() => { setQuery(''); setResults([]); inputRef.current?.focus(); }}
-                            className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                            className="text-muted hover:text-gray-600 p-1 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
                         >
                             <X size={14} />
                         </button>
                     )}
-                    <span className="text-gray-400 text-xs border border-gray-300 dark:border-gray-600 rounded px-1.5 py-0.5 ml-1 hidden sm:block">
+                    <span className="text-muted text-xs border border-gray-300 dark:border-gray-600 rounded px-1.5 py-0.5 ml-1 hidden sm:block">
                         Ctrl+P
                     </span>
                 </div>
             </div>
 
             {isOpen && (
-                <div className="absolute top-full left-0 right-0 mt-2 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 max-h-[60vh] overflow-y-auto z-50 divide-y divide-gray-100 dark:divide-gray-700">
+                <div className="absolute top-full left-0 right-0 mt-2 bg-surface rounded-xl shadow-2xl border border-base max-h-[60vh] overflow-y-auto z-50 divide-y divide-gray-100 dark:divide-gray-700">
 
                     {query ? (
                         <>
-                            <div className="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 text-xs text-gray-500 font-medium flex justify-between items-center sticky top-0 backdrop-blur-sm z-10">
+                            <div className="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 text-xs text-secondary font-medium flex justify-between items-center sticky top-0 backdrop-blur-sm z-10">
                                 <span>{results.length} results found</span>
-                                <span className="text-[10px] uppercase tracking-wider text-gray-400">Arrow Key Navigation</span>
+                                <span className="text-[10px] uppercase tracking-wider text-muted">Arrow Key Navigation</span>
                             </div>
                             <ul className="py-2">
                                 {results.map((result, index) => (
@@ -201,19 +233,19 @@ export const SearchBar = () => {
                                         onClick={() => openFile(result.path)}
                                         onMouseEnter={() => setSelectedIndex(index)}
                                     >
-                                        <div className={`p-2.5 rounded-lg shrink-0 ${index === selectedIndex ? 'bg-blue-100/50 dark:bg-blue-800/30 text-blue-600 dark:text-blue-400' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'}`}>
+                                        <div className={`p-2.5 rounded-lg shrink-0 ${index === selectedIndex ? 'bg-blue-100/50 dark:bg-blue-800/30 text-blue-600 dark:text-blue-400' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-muted'}`}>
                                             {result.extension ? <File size={20} className="stroke-[1.5]" /> : <Folder size={20} className="stroke-[1.5]" />}
                                         </div>
                                         <div className="flex-1 min-w-0">
                                             <div className="flex justify-between items-baseline mb-0.5">
-                                                <h4 className={`text-sm font-medium truncate ${index === selectedIndex ? 'text-blue-900 dark:text-blue-100' : 'text-gray-900 dark:text-gray-100'}`}>
+                                                <h4 className={`text-sm font-medium truncate ${index === selectedIndex ? 'text-blue-900 dark:text-blue-100' : 'text-primary'}`}>
                                                     {result.name}
                                                 </h4>
-                                                <span className="text-xs text-gray-400 whitespace-nowrap ml-3 font-mono">
+                                                <span className="text-xs text-muted whitespace-nowrap ml-3 font-mono">
                                                     {formatSize(result.size_bytes)}
                                                 </span>
                                             </div>
-                                            <div className="flex justify-between items-center text-xs text-gray-500 dark:text-gray-400">
+                                            <div className="flex justify-between items-center text-xs text-secondary dark:text-muted">
                                                 <span className="truncate mr-4 opacity-75" title={result.path}>
                                                     {result.path}
                                                 </span>
@@ -228,7 +260,7 @@ export const SearchBar = () => {
                         </>
                     ) : (
                         <>
-                            <div className="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 text-xs text-gray-500 font-medium flex justify-between items-center sticky top-0 backdrop-blur-sm z-10">
+                            <div className="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 text-xs text-secondary font-medium flex justify-between items-center sticky top-0 backdrop-blur-sm z-10">
                                 <span>Recent Searches</span>
                             </div>
                             <ul className="py-2">
@@ -239,18 +271,37 @@ export const SearchBar = () => {
                                         onClick={() => setQuery(item.query)}
                                         onMouseEnter={() => setSelectedIndex(index)}
                                     >
-                                        <Clock size={16} className="text-gray-400" />
+                                        <Clock size={16} className="text-muted" />
                                         <div className="flex-1">
                                             <span className="text-sm text-gray-700 dark:text-gray-200">{item.query}</span>
                                         </div>
                                         <ArrowRight size={14} className="text-gray-300 -rotate-45" />
                                     </li>
                                 )) : (
-                                    <li className="px-4 py-4 text-center text-gray-400 text-sm">
+                                    <li className="px-4 py-4 text-center text-muted text-sm">
                                         No recent searches
                                     </li>
                                 )}
                             </ul>
+                            {tagSuggestions.length > 0 && (
+                                <div className="px-4 pb-3">
+                                    <div className="text-[10px] uppercase tracking-wider text-muted mb-2">Tags</div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {tagSuggestions.map((tag) => (
+                                            <button
+                                                key={tag}
+                                                className="text-xs px-2 py-1 rounded-full bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50"
+                                                onClick={() => {
+                                                    setQuery(`tag:${tag}`);
+                                                    setIsOpen(true);
+                                                }}
+                                            >
+                                                {tag}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                         </>
                     )}
                 </div>
@@ -258,3 +309,4 @@ export const SearchBar = () => {
         </div>
     );
 };
+

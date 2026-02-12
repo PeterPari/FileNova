@@ -1,12 +1,43 @@
-import { X, Plus, Home } from 'lucide-react';
+import { X, Plus, Home, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useMemo } from 'react';
 import { useFileStore } from '../store/fileStore';
+
+const TAB_UNLOAD_THRESHOLD = 10;
+const VISIBLE_WINDOW = 4; // tabs visible on each side of active
 
 export const TabBar = () => {
     const { tabs, activeTabIndex, setActiveTab, closeTab, addTab } = useFileStore();
 
+    // When >10 tabs, only render nearby tabs to reduce DOM
+    const { visibleTabs, hiddenBefore, hiddenAfter } = useMemo(() => {
+        if (tabs.length <= TAB_UNLOAD_THRESHOLD) {
+            return { visibleTabs: tabs.map((t, i) => ({ tab: t, index: i })), hiddenBefore: 0, hiddenAfter: 0 };
+        }
+
+        const start = Math.max(0, activeTabIndex - VISIBLE_WINDOW);
+        const end = Math.min(tabs.length, activeTabIndex + VISIBLE_WINDOW + 1);
+
+        return {
+            visibleTabs: tabs.slice(start, end).map((t, i) => ({ tab: t, index: start + i })),
+            hiddenBefore: start,
+            hiddenAfter: Math.max(0, tabs.length - end),
+        };
+    }, [tabs, activeTabIndex]);
+
     return (
         <div className="flex items-center bg-gray-100 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-2 pt-2 gap-1 overflow-x-auto no-scrollbar">
-            {tabs.map((tab, index) => {
+            {hiddenBefore > 0 && (
+                <button
+                    onClick={() => setActiveTab(Math.max(0, activeTabIndex - VISIBLE_WINDOW))}
+                    className="flex items-center gap-1 px-2 py-1.5 text-xs text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-t-lg"
+                    title={`${hiddenBefore} more tab(s)`}
+                >
+                    <ChevronLeft size={12} />
+                    <span>{hiddenBefore}</span>
+                </button>
+            )}
+
+            {visibleTabs.map(({ tab, index }) => {
                 const isActive = index === activeTabIndex;
                 return (
                     <div
@@ -39,6 +70,17 @@ export const TabBar = () => {
                     </div>
                 );
             })}
+
+            {hiddenAfter > 0 && (
+                <button
+                    onClick={() => setActiveTab(Math.min(tabs.length - 1, activeTabIndex + VISIBLE_WINDOW))}
+                    className="flex items-center gap-1 px-2 py-1.5 text-xs text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-t-lg"
+                    title={`${hiddenAfter} more tab(s)`}
+                >
+                    <span>{hiddenAfter}</span>
+                    <ChevronRight size={12} />
+                </button>
+            )}
 
             <button
                 onClick={() => addTab('')}

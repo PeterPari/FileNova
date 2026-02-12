@@ -1,0 +1,69 @@
+/* Light Theme Variables */
+[data-theme="light"] {
+  /* Backgrounds */
+  --bg-base: #ffffff;
+  --bg-secondary: #f5f5f5;
+  --bg-tertiary: #e0e0e0;
+  --bg-hover: #f0f0f0;
+  --bg-active: #e5e5e5;
+  
+  /* Text Colors */
+  --text-primary: #1a1a1a;
+  --text-secondary: #4a4a4a;
+  --text-tertiary: #666666;
+  --text-disabled: #9ca3af;
+  
+  /* Accent Colors (adjusted for contrast) */
+  --accent-blue: #2563eb;
+  --accent-blue-hover: #1d4ed8;
+  --accent-green: #059669;
+  --accent-green-hover: #047857;
+  --accent-red: #dc2626;
+  --accent-red-hover: #b91c1c;
+  --accent-yellow: #d97706;
+  --accent-yellow-hover: #b45309;
+  
+  /* Borders */
+  --border-primary: #e0e0e0;
+  --border-secondary: #f0f0f0;
+  --border-focus: #2563eb;
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  
+  /* Syntax Highlighting (Light) */
+  --syntax-keyword: #9d4edd;
+  --syntax-string: #2d6a4f;
+  --syntax-function: #0077b6;
+  --syntax-comment: #6c757d;
+  --syntax-variable: #d00000;
+  --syntax-number: #e85d04;
+  --syntax-operator: #0096c7;
+  
+  /* Status Colors */
+  --status-success: #059669;
+  --status-warning: #d97706;
+  --status-error: #dc2626;
+  --status-info: #2563eb;
+  
+  /* Spacing (can be overridden by compact mode) */
+  --spacing-xs: 0.25rem;
+  --spacing-sm: 0.5rem;
+  --spacing-md: 1rem;
+  --spacing-lg: 1.5rem;
+  --spacing-xl: 2rem;
+  
+  /* Border Radius */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+  
+  /* Scrollbar */
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: #cbd5e1;
+  --scrollbar-thumb-hover: #94a3b8;
+}

@@ -50,8 +50,8 @@ impl EmbeddingConfig {
             ollama_url: "http://localhost:11434".to_string(),
             openai_api_key: None,
             model: "nomic-embed-text".to_string(),
-            chunk_size: 1000, // Reduced for better granularity
-            chunk_overlap: 100,
+            chunk_size: 512,
+            chunk_overlap: 50,
             dimensions: 768,
         }
     }
@@ -64,6 +64,10 @@ impl EmbeddingConfig {
         }
 
         if let Ok(Some(url)) = get_setting(conn, "ollama_url") {
+            if !url.is_empty() {
+                config.ollama_url = url;
+            }
+        } else if let Ok(Some(url)) = get_setting(conn, "ai_provider_url") {
             if !url.is_empty() {
                 config.ollama_url = url;
             }
@@ -106,18 +110,19 @@ pub struct EmbeddingChunk {
     pub file_path: String,
     pub chunk_index: u32,
     pub chunk_text: String,
+    pub char_offset: usize,
     pub embedding: Vec<f32>,
 }
 
 #[derive(Serialize)]
 struct OllamaEmbedRequest {
     model: String,
-    input: String,
+    prompt: String,
 }
 
 #[derive(Deserialize)]
 struct OllamaEmbedResponse {
-    embeddings: Vec<Vec<f32>>,
+    embedding: Vec<f32>,
 }
 
 #[derive(Deserialize)]
@@ -130,60 +135,58 @@ struct OllamaModel {
     name: String,
 }
 
-/// Split text into overlapping chunks, snapping to sentence boundaries.
-pub fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<String> {
+/// Split text into overlapping token chunks and return (chunk_text, char_offset).
+pub fn chunk_text_with_offsets(
+    text: &str,
+    chunk_size: usize,
+    overlap: usize,
+) -> Vec<(String, usize)> {
     let text = text.trim();
     if text.is_empty() {
         return vec![];
     }
-    if text.len() <= chunk_size {
-        return vec![text.to_string()];
+
+    let mut tokens = Vec::new();
+    let mut in_token = false;
+    let mut token_start = 0usize;
+
+    for (idx, ch) in text.char_indices() {
+        if ch.is_whitespace() {
+            if in_token {
+                tokens.push((token_start, idx));
+                in_token = false;
+            }
+        } else if !in_token {
+            in_token = true;
+            token_start = idx;
+        }
+    }
+    if in_token {
+        tokens.push((token_start, text.len()));
     }
 
-    let _step = chunk_size.saturating_sub(overlap).max(1);
+    if tokens.is_empty() {
+        return vec![];
+    }
+
     let mut chunks = Vec::new();
-    let mut start = 0;
+    let mut start_idx = 0usize;
+    let step = chunk_size.saturating_sub(overlap).max(1);
 
-    while start < text.len() {
-        let end = (start + chunk_size).min(text.len());
-
-        // Try to snap to a sentence boundary in the last 20% of the chunk
-        let snap_start = start + (chunk_size * 4 / 5).min(end - start);
-        let mut snap_pos = end;
-
-        if end < text.len() {
-            // Look for sentence boundaries: '. ', '? ', '! ', '\n'
-            let segment = &text[snap_start..end];
-            let candidates = [". ", "? ", "! ", "\n"];
-            let mut best = None;
-            for delim in &candidates {
-                if let Some(pos) = segment.rfind(delim) {
-                    let abs_pos = snap_start + pos + delim.len();
-                    match best {
-                        None => best = Some(abs_pos),
-                        Some(b) if abs_pos > b => best = Some(abs_pos),
-                        _ => {}
-                    }
-                }
-            }
-            if let Some(bp) = best {
-                snap_pos = bp;
-            }
-        }
-
-        let chunk = text[start..snap_pos].trim();
+    while start_idx < tokens.len() {
+        let end_idx = (start_idx + chunk_size).min(tokens.len());
+        let start_char = tokens[start_idx].0;
+        let end_char = tokens[end_idx - 1].1;
+        let chunk = text[start_char..end_char].trim();
         if !chunk.is_empty() {
-            chunks.push(chunk.to_string());
+            chunks.push((chunk.to_string(), start_char));
         }
 
-        if snap_pos >= text.len() {
+        if end_idx >= tokens.len() {
             break;
         }
 
-        start = snap_pos.saturating_sub(overlap);
-        if start >= snap_pos {
-            break;
-        }
+        start_idx = start_idx.saturating_add(step);
     }
 
     chunks
@@ -206,12 +209,11 @@ async fn generate_ollama_embedding(
     config: &EmbeddingConfig,
     text: &str,
 ) -> Result<Vec<f32>, String> {
-    let url = format!("{}/api/embed", config.ollama_url);
-
     let request = OllamaEmbedRequest {
         model: config.model.clone(),
-        input: text.to_string(),
+        prompt: text.to_string(),
     };
+    let url = format!("{}/api/embeddings", config.ollama_url);
 
     let response = client
         .post(&url)
@@ -232,11 +234,11 @@ async fn generate_ollama_embedding(
         .await
         .map_err(|e| format!("Failed to parse Ollama response: {}", e))?;
 
-    embed_response
-        .embeddings
-        .into_iter()
-        .next()
-        .ok_or_else(|| "No embedding in response".to_string())
+    if embed_response.embedding.is_empty() {
+        return Err("No embedding in response".to_string());
+    }
+
+    Ok(embed_response.embedding)
 }
 
 async fn generate_openai_embedding(
@@ -324,6 +326,75 @@ pub async fn check_openai_health(config: &EmbeddingConfig) -> Result<bool, Strin
              // If error is 401, key is bad. If connection error, network down.
              // For now just return err as string if strictly needed, or false.
              Err(format!("OpenAI check failed: {}", e))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── AiProvider ─────────────────────────────────────────────────
+    #[test]
+    fn provider_round_trip() {
+        assert_eq!(AiProvider::Ollama.to_string(), "ollama");
+        assert_eq!(AiProvider::OpenAI.to_string(), "openai");
+        assert!(matches!(AiProvider::from("ollama"), AiProvider::Ollama));
+        assert!(matches!(AiProvider::from("openai"), AiProvider::OpenAI));
+        assert!(matches!(AiProvider::from("OPENAI"), AiProvider::OpenAI));
+        assert!(matches!(AiProvider::from("unknown"), AiProvider::Ollama));
+    }
+
+    // ── EmbeddingConfig defaults ───────────────────────────────────
+    #[test]
+    fn default_config_values() {
+        let c = EmbeddingConfig::default_config();
+        assert_eq!(c.chunk_size, 512);
+        assert_eq!(c.chunk_overlap, 50);
+        assert_eq!(c.dimensions, 768);
+        assert_eq!(c.model, "nomic-embed-text");
+        assert!(matches!(c.provider, AiProvider::Ollama));
+    }
+
+    // ── chunk_text_with_offsets ─────────────────────────────────────
+    #[test]
+    fn chunk_empty_text() {
+        assert!(chunk_text_with_offsets("", 100, 10).is_empty());
+        assert!(chunk_text_with_offsets("   ", 100, 10).is_empty());
+    }
+
+    #[test]
+    fn chunk_short_text_single_chunk() {
+        let chunks = chunk_text_with_offsets("hello world", 100, 10);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].0, "hello world");
+        assert_eq!(chunks[0].1, 0);
+    }
+
+    #[test]
+    fn chunk_text_produces_overlap() {
+        // 10 words, chunk_size=3 tokens, overlap=1
+        let text = "one two three four five six seven eight nine ten";
+        let chunks = chunk_text_with_offsets(text, 3, 1);
+        assert!(chunks.len() > 1);
+
+        // Each chunk (except the first) should start with a token from the previous chunk's tail
+        // due to overlap
+        for i in 1..chunks.len() {
+            let prev_words: Vec<&str> = chunks[i - 1].0.split_whitespace().collect();
+            let curr_words: Vec<&str> = chunks[i].0.split_whitespace().collect();
+            // Last word of previous chunk should overlap with first word of current
+            assert_eq!(prev_words.last().unwrap(), &curr_words[0]);
+        }
+    }
+
+    #[test]
+    fn chunk_offsets_are_valid() {
+        let text = "The quick brown fox jumps over the lazy dog";
+        let chunks = chunk_text_with_offsets(text, 3, 1);
+        for (chunk_text, offset) in &chunks {
+            // The chunk text should start at the given offset in the original text
+            assert!(text[*offset..].starts_with(chunk_text.split_whitespace().next().unwrap()));
         }
     }
 }

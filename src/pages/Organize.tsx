@@ -2,11 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import SuggestionCard, { Suggestion, SuggestionPlan } from '../components/Organize/SuggestionCard';
 import FolderStructureOptimizer from '../components/Organize/FolderStructureOptimizer';
+import { Toast } from '../components/Toast';
 
 const Organize: React.FC = () => {
     const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
     const [loading, setLoading] = useState(false);
     const [analyzing, setAnalyzing] = useState(false);
+    const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info'; action?: { label: string; onClick: () => void } } | null>(null);
 
     const fetchSuggestions = async () => {
         try {
@@ -34,14 +36,34 @@ const Organize: React.FC = () => {
         }
     };
 
+    const handleUndo = async (batchId: string) => {
+        try {
+            await invoke('undo_batch', { batchId });
+            setToast({ message: "Changes undone successfully.", type: 'success' });
+            fetchSuggestions(); // Refresh to potentially show suggestion again? Or just clear.
+        } catch (e) {
+            console.error("Undo failed:", e);
+            setToast({ message: "Failed to undo changes: " + e, type: 'error' });
+        }
+    };
+
     const handleAccept = async (id: number) => {
         try {
-            await invoke('accept_suggestion', { id });
+            const batchId = await invoke<string>('accept_suggestion', { id });
             // Optimistically remove
             setSuggestions(prev => prev.filter(s => s.id !== id));
+
+            setToast({
+                message: "Suggestion applied successfully.",
+                type: 'success',
+                action: {
+                    label: "Undo",
+                    onClick: () => handleUndo(batchId)
+                }
+            });
         } catch (e) {
             console.error("Failed to accept suggestion:", e);
-            alert("Failed to execute suggestion: " + e);
+            setToast({ message: "Failed to execute suggestion: " + e, type: 'error' });
         }
     };
 
@@ -137,6 +159,14 @@ const Organize: React.FC = () => {
                     <FolderStructureOptimizer />
                 </div>
             </div>
+            {toast && (
+                <Toast
+                    message={toast.message}
+                    type={toast.type}
+                    action={toast.action}
+                    onClose={() => setToast(null)}
+                />
+            )}
         </div>
     );
 };

@@ -4,6 +4,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, 
 import { FileEntry, useFileStore } from '../store/fileStore';
 import { HardDrive, File } from 'lucide-react';
 import { Treemap } from './Treemap';
+import { getParentPath } from '../utils/path';
 
 interface FileTypeStats {
     category: string;
@@ -17,23 +18,46 @@ interface StorageBreakdown {
     breakdown: FileTypeStats[];
 }
 
+interface DuplicateSummary {
+    total_groups: number;
+    total_wasted_bytes: number;
+    exact_groups: number;
+    perceptual_groups: number;
+    smart_groups: number;
+}
+
 interface FolderSize {
     name: string;
     path: string;
     size: number;
+    category: string;
 }
 
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d', '#ffc658'];
+// Updated Compass/FileNova Theme Colors
+const COLORS = [
+    '#0ea5e9', // Sky 500 (Primary)
+    '#22c55e', // Green 500 (Secondary)
+    '#6366f1', // Indigo 500
+    '#f59e0b', // Amber 500
+    '#ec4899', // Pink 500
+    '#8b5cf6', // Violet 500
+    '#14b8a6', // Teal 500
+];
 
 export const AnalyticsDashboard = () => {
-    const { currentPath } = useFileStore();
+    const { currentPath, setCurrentPath, setCurrentView } = useFileStore();
     const [breakdown, setBreakdown] = useState<StorageBreakdown | null>(null);
+    const [duplicateSummary, setDuplicateSummary] = useState<DuplicateSummary | null>(null);
     const [largestFiles, setLargestFiles] = useState<FileEntry[]>([]);
     const [folderSizes, setFolderSizes] = useState<FolderSize[]>([]);
     const [tagStats, setTagStats] = useState<{ tag: string, count: number }[]>([]);
     const [treemapData, setTreemapData] = useState<any>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const [dimensions, setDimensions] = useState({ width: 600, height: 400 });
+    const [largestSort, setLargestSort] = useState<{ key: 'size' | 'path' | 'type' | 'name'; direction: 'asc' | 'desc' }>({
+        key: 'size',
+        direction: 'desc'
+    });
 
     useEffect(() => {
         if (containerRef.current) {
@@ -60,7 +84,7 @@ export const AnalyticsDashboard = () => {
             // Treemap expects { name: 'root', children: [...] }
             setTreemapData({
                 name: 'root',
-                children: folderSizes.map(f => ({ name: f.name, value: f.size }))
+                children: folderSizes.map(f => ({ name: f.name, value: f.size, path: f.path, category: f.category }))
             });
         }
     }, [folderSizes]);
@@ -69,6 +93,8 @@ export const AnalyticsDashboard = () => {
         try {
             const bd = await invoke<StorageBreakdown>('get_storage_breakdown');
             setBreakdown(bd);
+            const dup = await invoke<DuplicateSummary>('get_duplicate_summary');
+            setDuplicateSummary(dup);
             const lf = await invoke<FileEntry[]>('get_largest_files', { limit: 50 });
             setLargestFiles(lf);
             const ts = await invoke<{ tag: string, count: number }[]>('get_tag_stats');
@@ -97,42 +123,116 @@ export const AnalyticsDashboard = () => {
         return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
     };
 
+    const totalSize = breakdown?.total_size ?? 0;
+    const formatPercent = (size: number) => {
+        if (!totalSize) return '0%';
+        return `${((size / totalSize) * 100).toFixed(1)}%`;
+    };
+
+    const getFileTypeLabel = (name: string) => name.split('.').pop()?.toUpperCase() || 'FILE';
+
+    const sortedLargestFiles = [...largestFiles].sort((a, b) => {
+        let compare = 0;
+        switch (largestSort.key) {
+            case 'size':
+                compare = a.size - b.size;
+                break;
+            case 'path':
+                compare = a.path.localeCompare(b.path);
+                break;
+            case 'type':
+                compare = getFileTypeLabel(a.name).localeCompare(getFileTypeLabel(b.name));
+                break;
+            case 'name':
+            default:
+                compare = a.name.localeCompare(b.name);
+                break;
+        }
+        return largestSort.direction === 'asc' ? compare : -compare;
+    });
+
+    const handleSort = (key: 'size' | 'path' | 'type' | 'name') => {
+        setLargestSort(prev => {
+            if (prev.key === key) {
+                return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+            }
+            const defaultDir = key === 'size' ? 'desc' : 'asc';
+            return { key, direction: defaultDir };
+        });
+    };
+
+    const navigateToFile = async (path: string) => {
+        const parent = getParentPath(path);
+        setCurrentView('browser');
+        if (parent !== null) {
+            await setCurrentPath(parent);
+        }
+    };
+
+    const drillDownToFolder = async (path: string) => {
+        await setCurrentPath(path);
+    };
+
     return (
         <div className="p-6 h-full overflow-y-auto bg-gray-50 dark:bg-gray-900 pb-20">
-            <h1 className="text-2xl font-bold mb-6 text-gray-800 dark:text-gray-100 flex items-center gap-2">
+            <h1 className="text-2xl font-bold mb-6 text-primary flex items-center gap-2">
                 <HardDrive /> Storage Analytics
             </h1>
 
             {/* Summary Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
-                    <h3 className="text-sm font-medium text-gray-500 uppercase">Total Usage</h3>
-                    <p className="text-3xl font-bold text-gray-900 dark:text-gray-100 mt-2">
+                <div className="bg-surface p-6 rounded-xl shadow-sm border border-base">
+                    <h3 className="text-sm font-medium text-secondary uppercase">Total Usage</h3>
+                    <p className="text-3xl font-bold text-primary mt-2">
                         {breakdown ? formatSize(breakdown.total_size) : '...'}
                     </p>
                 </div>
-                <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
-                    <h3 className="text-sm font-medium text-gray-500 uppercase">Total Files</h3>
-                    <p className="text-3xl font-bold text-gray-900 dark:text-gray-100 mt-2">
+                <div className="bg-surface p-6 rounded-xl shadow-sm border border-base">
+                    <h3 className="text-sm font-medium text-secondary uppercase">Total Files</h3>
+                    <p className="text-3xl font-bold text-primary mt-2">
                         {breakdown ? breakdown.file_count.toLocaleString() : '...'}
                     </p>
                 </div>
-                <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
-                    <h3 className="text-sm font-medium text-gray-500 uppercase">Largest File</h3>
-                    <p className="text-lg font-medium text-gray-900 dark:text-gray-100 mt-2 truncate">
+                <div className="bg-surface p-6 rounded-xl shadow-sm border border-base">
+                    <h3 className="text-sm font-medium text-secondary uppercase">Largest File</h3>
+                    <p className="text-lg font-medium text-primary mt-2 truncate">
                         {largestFiles.length > 0 ? largestFiles[0].name : '...'}
                     </p>
-                    <p className="text-sm text-gray-500">
+                    <p className="text-sm text-secondary">
                         {largestFiles.length > 0 ? formatSize(largestFiles[0].size) : ''}
                     </p>
                 </div>
             </div>
 
+            {/* Duplicates Summary */}
+            {duplicateSummary && (
+                <div className="bg-surface p-6 rounded-xl shadow-sm border border-base mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                    <div>
+                        <h3 className="text-sm font-medium text-secondary uppercase">Duplicates Found</h3>
+                        <p className="text-2xl font-bold text-primary mt-2">
+                            {duplicateSummary.total_groups} groups
+                        </p>
+                        <p className="text-sm text-secondary mt-1">
+                            {formatSize(duplicateSummary.total_wasted_bytes)} wasted
+                        </p>
+                    </div>
+                    <div className="text-sm text-secondary">
+                        {duplicateSummary.exact_groups} exact &middot; {duplicateSummary.perceptual_groups} image &middot; {duplicateSummary.smart_groups} smart
+                    </div>
+                    <button
+                        onClick={() => setCurrentView('duplicates')}
+                        className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                    >
+                        Review Duplicates
+                    </button>
+                </div>
+            )}
+
             {/* Visualizations Row 1 */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
                 {/* File Type Distribution */}
-                <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
-                    <h3 className="text-lg font-semibold mb-4 text-gray-800 dark:text-gray-100">Storage by File Type</h3>
+                <div className="bg-surface p-6 rounded-xl shadow-sm border border-base">
+                    <h3 className="text-lg font-semibold mb-4 text-primary">Storage by File Type</h3>
                     <div className="h-64">
                         {breakdown ? (
                             <ResponsiveContainer width="100%" height="100%">
@@ -150,8 +250,18 @@ export const AnalyticsDashboard = () => {
                                             <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                                         ))}
                                     </Pie>
-                                    <Tooltip formatter={(value: any) => formatSize(value)} />
-                                    <Legend />
+                                    <Tooltip
+                                        formatter={(value: any) => {
+                                            const size = Number(value) || 0;
+                                            return `${formatSize(size)} (${formatPercent(size)})`;
+                                        }}
+                                    />
+                                    <Legend
+                                        formatter={(value: string, _entry: any, index: number) => {
+                                            const size = breakdown?.breakdown[index]?.size ?? 0;
+                                            return `${value} - ${formatPercent(size)} (${formatSize(size)})`;
+                                        }}
+                                    />
                                 </PieChart>
                             </ResponsiveContainer>
                         ) : <div className="flex items-center justify-center h-full text-gray-400">Loading...</div>}
@@ -162,8 +272,8 @@ export const AnalyticsDashboard = () => {
             {/* Tag Cloud & Folder Sizes */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
                 {/* Tag Cloud */}
-                <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
-                    <h3 className="text-lg font-semibold mb-4 text-gray-800 dark:text-gray-100">Tag Cloud</h3>
+                <div className="bg-surface p-6 rounded-xl shadow-sm border border-base">
+                    <h3 className="text-lg font-semibold mb-4 text-primary">Tag Cloud</h3>
                     <div className="flex flex-wrap gap-2">
                         {tagStats.length > 0 ? (
                             tagStats.map((stat) => (
@@ -182,18 +292,20 @@ export const AnalyticsDashboard = () => {
                 </div>
 
                 {/* Folder Sizes Bar Chart */}
-                <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
-                    <h3 className="text-lg font-semibold mb-4 text-gray-800 dark:text-gray-100">Folder Sizes (Current Dir)</h3>
+                <div className="bg-surface p-6 rounded-xl shadow-sm border border-base">
+                    <h3 className="text-lg font-semibold mb-4 text-primary">Folder Sizes (Current Dir)</h3>
                     <div className="h-64">
                         {folderSizes.length > 0 ? (
-                            <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={folderSizes.slice(0, 10)} layout="vertical">
+                            <div style={{ height: Math.max(240, folderSizes.length * 24) }}>
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <BarChart data={folderSizes} layout="vertical">
                                     <XAxis type="number" hide />
                                     <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 12 }} />
                                     <Tooltip formatter={(value: any) => formatSize(value)} labelStyle={{ color: '#6b7280' }} />
                                     <Bar dataKey="size" fill="#8884d8" radius={[0, 4, 4, 0]} />
-                                </BarChart>
-                            </ResponsiveContainer>
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            </div>
                         ) : <div className="flex items-center justify-center h-full text-gray-400">
                             {currentPath ? "No folders found" : "Select a folder to view sizes"}
                         </div>}
@@ -202,11 +314,20 @@ export const AnalyticsDashboard = () => {
             </div>
 
             {/* Treemap */}
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 mb-8" ref={containerRef}>
-                <h3 className="text-lg font-semibold mb-4 text-gray-800 dark:text-gray-100">Directory Treemap</h3>
+            <div className="bg-surface p-6 rounded-xl shadow-sm border border-base mb-8" ref={containerRef}>
+                <h3 className="text-lg font-semibold mb-4 text-primary">Directory Treemap</h3>
                 <div className="w-full flex justify-center">
                     {treemapData && treemapData.children.length > 0 ? (
-                        <Treemap data={treemapData} width={dimensions.width - 48} height={400} />
+                        <Treemap
+                            data={treemapData}
+                            width={dimensions.width - 48}
+                            height={400}
+                            onNodeClick={(node) => {
+                                if (node?.path) {
+                                    drillDownToFolder(node.path);
+                                }
+                            }}
+                        />
                     ) : (
                         <div className="h-[400px] flex items-center justify-center text-gray-400 w-full">
                             {currentPath ? "Not enough data for Treemap" : "Select a folder to view map"}
@@ -216,24 +337,28 @@ export const AnalyticsDashboard = () => {
             </div>
 
             {/* Largest Files Table */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
-                <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-                    <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100">Top 50 Largest Files</h3>
+            <div className="bg-surface rounded-xl shadow-sm border border-base overflow-hidden">
+                <div className="p-6 border-b border-base">
+                    <h3 className="text-lg font-semibold text-primary">Top 50 Largest Files</h3>
                 </div>
                 <div className="overflow-x-auto">
-                    <table className="w-full text-left text-sm text-gray-500 dark:text-gray-400">
+                    <table className="w-full text-left text-sm text-secondary dark:text-gray-400">
                         <thead className="bg-gray-50 dark:bg-gray-900/50 text-xs uppercase text-gray-700 dark:text-gray-300">
                             <tr>
-                                <th className="px-6 py-3">Name</th>
-                                <th className="px-6 py-3">Path</th>
-                                <th className="px-6 py-3">Size</th>
-                                <th className="px-6 py-3">Type</th>
+                                <th className="px-6 py-3 cursor-pointer" onClick={() => handleSort('name')}>Name</th>
+                                <th className="px-6 py-3 cursor-pointer" onClick={() => handleSort('path')}>Path</th>
+                                <th className="px-6 py-3 cursor-pointer" onClick={() => handleSort('size')}>Size</th>
+                                <th className="px-6 py-3 cursor-pointer" onClick={() => handleSort('type')}>Type</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                            {largestFiles.map((file) => (
-                                <tr key={file.path} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
-                                    <td className="px-6 py-4 font-medium text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                            {sortedLargestFiles.map((file) => (
+                                <tr
+                                    key={file.path}
+                                    className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors cursor-pointer"
+                                    onClick={() => navigateToFile(file.path)}
+                                >
+                                    <td className="px-6 py-4 font-medium text-primary flex items-center gap-2">
                                         <File size={16} className="text-gray-400" />
                                         <div className="truncate max-w-[200px]" title={file.name}>{file.name}</div>
                                     </td>
@@ -245,7 +370,7 @@ export const AnalyticsDashboard = () => {
                                     </td>
                                     <td className="px-6 py-4">
                                         {/* Simple type inference */}
-                                        {file.name.split('.').pop()?.toUpperCase() || 'FILE'}
+                                        {getFileTypeLabel(file.name)}
                                     </td>
                                 </tr>
                             ))}
@@ -256,3 +381,4 @@ export const AnalyticsDashboard = () => {
         </div>
     );
 };
+

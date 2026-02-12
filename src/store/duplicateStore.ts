@@ -13,7 +13,7 @@ export interface DuplicateFileEntry {
 
 export interface DuplicateGroup {
     id: number;
-    group_type: 'exact' | 'perceptual';
+    group_type: 'exact' | 'perceptual' | 'smart';
     hash_blake3: string | null;
     file_count: number;
     total_wasted_bytes: number;
@@ -157,9 +157,24 @@ export const useDuplicateStore = create<DuplicateStore>((set, get) => ({
 
         set({ isLoading: true });
         try {
+            const allFiles = get().groups.flatMap(group => group.files);
+            const keepFile = allFiles.find((file) => file.path === keepFilePath);
+            if (!keepFile) {
+                throw new Error('Keep file could not be resolved');
+            }
+
+            const deleteIds = selectedFilePaths
+                .map((path) => allFiles.find((file) => file.path === path))
+                .filter((file): file is DuplicateFileEntry => Boolean(file))
+                .map((file) => file.file_id);
+
+            if (deleteIds.length === 0) {
+                throw new Error('No files selected for deletion');
+            }
+
             const result = await invoke<BatchResult>('delete_duplicate_files', {
-                filePaths: selectedFilePaths,
-                keepPath: keepFilePath,
+                fileIds: deleteIds,
+                keepFileId: keepFile.file_id,
             });
             await get().fetchSummary();
             await get().fetchGroups();

@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tantivy::collector::TopDocs;
-use tantivy::query::{QueryParser, TermQuery};
+use tantivy::query::{AllQuery, Query, QueryParser};
 use tantivy::schema::*;
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, TantivyError, Term};
 
@@ -129,7 +129,7 @@ impl IndexManager {
 
     pub fn rebuild_index(&self, db_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let conn = Connection::open(db_path)?;
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT path, name, extension, parent_path, size_bytes, modified_at FROM files",
         )?;
 
@@ -202,11 +202,12 @@ impl IndexManager {
         // Define fields that can be searched explicitly
         // invalid fields in query throws error.
 
-        if query_str.trim().is_empty() {
-            return Ok(vec![]);
-        }
+        let query: Box<dyn Query> = if query_str.trim().is_empty() {
+            Box::new(AllQuery)
+        } else {
+            Box::new(query_parser.parse_query(query_str)?)
+        };
 
-        let query = query_parser.parse_query(query_str)?;
         let top_docs = searcher.search(&query, &TopDocs::with_limit(limit))?;
 
         let mut results = Vec::new();

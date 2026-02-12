@@ -7,7 +7,9 @@ export const ActivityFeed: React.FC = () => {
     const [filters, setFilters] = useState<ActivityFilters>({
         limit: 50,
         time_range: 'all',
-        action_type: []
+        action_type: [],
+        folder: '',
+        file_type: []
     });
     const [isAutoRefresh, setIsAutoRefresh] = useState(true);
 
@@ -41,7 +43,8 @@ export const ActivityFeed: React.FC = () => {
     const getIcon = (action: string) => {
         if (action.includes('Create')) return <Plus className="text-green-500" size={18} />;
         if (action.includes('Modify')) return <Edit2 className="text-blue-500" size={18} />;
-        if (action.includes('Remove')) return <Trash2 className="text-red-500" size={18} />;
+        if (action.includes('Remove') || action.includes('Delete')) return <Trash2 className="text-red-500" size={18} />;
+        if (action.includes('Rename')) return <Folder className="text-orange-500" size={18} />;
         return <AlertTriangle className="text-yellow-500" size={18} />;
     };
 
@@ -49,9 +52,25 @@ export const ActivityFeed: React.FC = () => {
         // Clean up "kind(Modify(Name))" etc
         if (action.includes('Create')) return 'Created';
         if (action.includes('Modify')) return 'Modified';
-        if (action.includes('Remove')) return 'Deleted';
+        if (action.includes('Remove') || action.includes('Delete')) return 'Deleted';
+        if (action.includes('Rename')) return 'Moved';
         return action;
     };
+
+    const getActionColor = (action: string) => {
+        if (action.includes('Create')) return 'text-green-400';
+        if (action.includes('Modify')) return 'text-blue-400';
+        if (action.includes('Remove') || action.includes('Delete')) return 'text-red-400';
+        if (action.includes('Rename')) return 'text-orange-400';
+        return 'text-yellow-400';
+    };
+
+    const grouped = activityFeed.reduce<Record<string, typeof activityFeed>>((acc, item) => {
+        const day = new Date(item.detected_at).toDateString();
+        if (!acc[day]) acc[day] = [];
+        acc[day].push(item);
+        return acc;
+    }, {});
 
     return (
         <div className="h-full flex flex-col bg-gray-900 text-white">
@@ -96,7 +115,7 @@ export const ActivityFeed: React.FC = () => {
 
                         {/* Actions */}
                         <div className="flex items-center gap-2">
-                            {['Create', 'Modify', 'Remove'].map(action => {
+                            {['Create', 'Modify', 'Delete', 'Rename'].map(action => {
                                 const isActive = filters.action_type?.includes(action);
                                 return (
                                     <button
@@ -109,18 +128,47 @@ export const ActivityFeed: React.FC = () => {
                                     >
                                         {action === 'Create' && <Plus size={14} />}
                                         {action === 'Modify' && <Edit2 size={14} />}
-                                        {action === 'Remove' && <Trash2 size={14} />}
+                                        {action === 'Delete' && <Trash2 size={14} />}
+                                        {action === 'Rename' && <Folder size={14} />}
                                         {action}
                                     </button>
                                 );
                             })}
+                        </div>
+                        {/* Folder */}
+                        <div className="flex items-center gap-2">
+                            <input
+                                type="text"
+                                value={filters.folder || ''}
+                                onChange={(e) => setFilters({ ...filters, folder: e.target.value })}
+                                placeholder="Folder path filter"
+                                className="px-3 py-1.5 rounded-lg text-sm bg-gray-900 border border-gray-700 text-gray-300 w-56"
+                            />
+                        </div>
+                        {/* File Type */}
+                        <div className="flex items-center gap-2">
+                            <input
+                                type="text"
+                                value={(filters.file_type || []).join(', ')}
+                                onChange={(e) =>
+                                    setFilters({
+                                        ...filters,
+                                        file_type: e.target.value
+                                            .split(',')
+                                            .map((t) => t.trim().toLowerCase())
+                                            .filter(Boolean)
+                                    })
+                                }
+                                placeholder="File types (e.g. pdf, jpg)"
+                                className="px-3 py-1.5 rounded-lg text-sm bg-gray-900 border border-gray-700 text-gray-300 w-52"
+                            />
                         </div>
                     </div>
                 </div>
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
-                <div className="space-y-3">
+                <div className="space-y-6">
                     {activityFeed.length === 0 ? (
                         <div className="text-center text-gray-500 py-20 flex flex-col items-center gap-4">
                             <div className="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center">
@@ -129,33 +177,40 @@ export const ActivityFeed: React.FC = () => {
                             <p>No activity found for current filters.</p>
                         </div>
                     ) : (
-                        activityFeed.map((activity) => (
-                            <div key={activity.id} className="group bg-gray-800/50 hover:bg-gray-800 border border-gray-700/50 hover:border-gray-600 p-4 rounded-xl transition-all flex items-start gap-4">
-                                <div className={`p-2 rounded-lg bg-gray-900 border border-gray-700 group-hover:border-gray-600 transition-colors`}>
-                                    {getIcon(activity.action)}
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                    <div className="flex justify-between items-start">
-                                        <span className="font-semibold text-gray-200">
-                                            {getActionLabel(activity.action)}
-                                        </span>
-                                        <span className="text-xs text-gray-500 font-mono bg-gray-900 px-2 py-1 rounded">
-                                            {new Date(activity.detected_at).toLocaleString()}
-                                        </span>
-                                    </div>
-                                    <div className="text-sm text-purple-300 mt-1 font-mono break-all hover:text-purple-200 cursor-pointer transition-colors" title={activity.file_path}>
-                                        {activity.file_path}
-                                    </div>
-                                    <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
-                                        <span className="flex items-center gap-1">
-                                            <Folder size={12} />
-                                            {activity.file_path.split(/[/\\]/).slice(0, -1).pop() || 'Root'}
-                                        </span>
-                                        <span className="flex items-center gap-1">
-                                            <File size={12} />
-                                            {activity.file_path.split('.').pop()?.toUpperCase() || 'FILE'}
-                                        </span>
-                                    </div>
+                        Object.entries(grouped).map(([day, items]) => (
+                            <div key={day}>
+                                <div className="text-xs uppercase tracking-wider text-gray-400 mb-2">{day}</div>
+                                <div className="space-y-3">
+                                    {items.map((activity) => (
+                                        <div key={activity.id} className="group bg-gray-800/50 hover:bg-gray-800 border border-gray-700/50 hover:border-gray-600 p-4 rounded-xl transition-all flex items-start gap-4">
+                                            <div className="p-2 rounded-lg bg-gray-900 border border-gray-700 group-hover:border-gray-600 transition-colors">
+                                                {getIcon(activity.action)}
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex justify-between items-start">
+                                                    <span className={`font-semibold ${getActionColor(activity.action)}`}>
+                                                        {getActionLabel(activity.action)}
+                                                    </span>
+                                                    <span className="text-xs text-gray-500 font-mono bg-gray-900 px-2 py-1 rounded">
+                                                        {new Date(activity.detected_at).toLocaleTimeString()}
+                                                    </span>
+                                                </div>
+                                                <div className="text-sm text-purple-300 mt-1 font-mono break-all hover:text-purple-200 cursor-pointer transition-colors" title={activity.file_path}>
+                                                    {activity.file_path}
+                                                </div>
+                                                <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
+                                                    <span className="flex items-center gap-1">
+                                                        <Folder size={12} />
+                                                        {activity.file_path.split(/[/\\]/).slice(0, -1).pop() || 'Root'}
+                                                    </span>
+                                                    <span className="flex items-center gap-1">
+                                                        <File size={12} />
+                                                        {activity.file_path.split('.').pop()?.toUpperCase() || 'FILE'}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
                                 </div>
                             </div>
                         ))

@@ -15,7 +15,9 @@ pub struct HybridSearchResult {
     pub semantic_score: Option<f32>,
     pub combined_score: f32,
     pub snippet: Option<String>,
-    pub source: String, // "keyword" | "semantic" | "both"
+    pub chunk_index: Option<u32>,
+    pub char_offset: Option<u32>,
+    pub source: String, // "keyword" | "semantic" | "hybrid"
 }
 
 pub struct SearchConfig {
@@ -56,6 +58,8 @@ pub fn search_keyword_only(
             semantic_score: None,
             combined_score: r.score,
             snippet: None,
+            chunk_index: None,
+            char_offset: None,
             source: "keyword".to_string(),
         })
         .collect())
@@ -74,22 +78,24 @@ pub async fn search_semantic_only(
     let vector_results = vector_store.search(&query_embedding, limit * 2).await?;
 
     // Deduplicate by file_path (keep best chunk per file)
-    let mut best_per_file: HashMap<String, (f32, String)> = HashMap::new();
+    let mut best_per_file: HashMap<String, (f32, String, u32, u32)> = HashMap::new();
     for vr in &vector_results {
         let score = 1.0 - vr.distance; // Convert distance to similarity
         let entry = best_per_file.entry(vr.file_path.clone()).or_insert((
             score,
             vr.chunk_text.clone(),
+            vr.chunk_index,
+            vr.char_offset,
         ));
         if score > entry.0 {
-            *entry = (score, vr.chunk_text.clone());
+            *entry = (score, vr.chunk_text.clone(), vr.chunk_index, vr.char_offset);
         }
     }
 
     // Build results sorted by score
     let mut results: Vec<HybridSearchResult> = best_per_file
         .into_iter()
-        .map(|(path, (score, snippet))| {
+        .map(|(path, (score, snippet, chunk_index, char_offset))| {
             let name = std::path::Path::new(&path)
                 .file_name()
                 .unwrap_or_default()
@@ -109,6 +115,8 @@ pub async fn search_semantic_only(
                 semantic_score: Some(score),
                 combined_score: score,
                 snippet: Some(truncate_snippet(&snippet, 200)),
+                chunk_index: Some(chunk_index),
+                char_offset: Some(char_offset),
                 source: "semantic".to_string(),
             }
         })
@@ -194,7 +202,9 @@ pub async fn search_hybrid(
                     combined_score: kw * kr.keyword_score.unwrap_or(0.0)
                         + sw * sr.semantic_score.unwrap_or(0.0),
                     snippet: sr.snippet.clone(),
-                    source: "both".to_string(),
+                    chunk_index: sr.chunk_index,
+                    char_offset: sr.char_offset,
+                    source: "hybrid".to_string(),
                 },
                 (Some(kr), None) => HybridSearchResult {
                     combined_score: kw * kr.keyword_score.unwrap_or(0.0),

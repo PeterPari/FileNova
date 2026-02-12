@@ -1,5 +1,56 @@
 use rusqlite::{Connection, Result};
 use std::path::Path;
+use tauri::Manager;
+
+/// Connection pool for the application databases.
+pub struct DbPool {
+    pub main: r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>,
+    pub preview: r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>,
+}
+
+impl DbPool {
+    pub fn new(main_path: &Path, preview_path: &Path) -> std::result::Result<Self, String> {
+        let main_mgr = r2d2_sqlite::SqliteConnectionManager::file(main_path);
+        let main_pool = r2d2::Pool::builder()
+            .max_size(8)
+            .build(main_mgr)
+            .map_err(|e| format!("Failed to create main pool: {}", e))?;
+
+        // Set pragmas on each connection in the main pool
+        if let Ok(conn) = main_pool.get() {
+            let _ = conn.pragma_update(None, "journal_mode", "WAL");
+            let _ = conn.pragma_update(None, "synchronous", "NORMAL");
+        }
+
+        let preview_mgr = r2d2_sqlite::SqliteConnectionManager::file(preview_path);
+        let preview_pool = r2d2::Pool::builder()
+            .max_size(4)
+            .build(preview_mgr)
+            .map_err(|e| format!("Failed to create preview pool: {}", e))?;
+
+        if let Ok(conn) = preview_pool.get() {
+            let _ = conn.pragma_update(None, "journal_mode", "WAL");
+            let _ = conn.pragma_update(None, "synchronous", "NORMAL");
+        }
+
+        Ok(Self {
+            main: main_pool,
+            preview: preview_pool,
+        })
+    }
+}
+
+/// Get a pooled connection to the main database via AppHandle.
+pub fn get_conn(app: &tauri::AppHandle) -> std::result::Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>, String> {
+    let pool = app.state::<DbPool>();
+    pool.main.get().map_err(|e| format!("Pool error: {}", e))
+}
+
+/// Get a pooled connection to the preview/bookmarks database via AppHandle.
+pub fn get_preview_conn(app: &tauri::AppHandle) -> std::result::Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>, String> {
+    let pool = app.state::<DbPool>();
+    pool.preview.get().map_err(|e| format!("Pool error: {}", e))
+}
 
 pub fn init_db<P: AsRef<Path>>(path: P) -> Result<Connection> {
     let conn = Connection::open(path)?;
@@ -20,7 +71,12 @@ pub fn init_db<P: AsRef<Path>>(path: P) -> Result<Connection> {
             parent_path TEXT NOT NULL,
             hash_blake3 TEXT,
             content_extracted BOOLEAN DEFAULT FALSE,
+            extraction_completed BOOLEAN DEFAULT FALSE,
+            extracted_text TEXT,
+            extraction_error TEXT,
+            embedding_generated BOOLEAN DEFAULT FALSE,
             is_directory BOOLEAN DEFAULT FALSE,
+            is_deleted BOOLEAN DEFAULT FALSE,
             indexed_at DATETIME NOT NULL
         )",
         [],
@@ -47,7 +103,11 @@ pub fn init_db<P: AsRef<Path>>(path: P) -> Result<Connection> {
         [],
     )?;
 
-    // Create indexes
+    // Stage 4: Add columns to files (silently fails if exists)
+    let _ = conn.execute("ALTER TABLE files ADD COLUMN perceptual_hash TEXT", []);
+    let _ = conn.execute("ALTER TABLE files ADD COLUMN is_deleted BOOLEAN DEFAULT FALSE", []);
+
+    // Create indexes (must run after ALTER TABLE so columns exist for older databases)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_parent_path ON files (parent_path)",
         [],
@@ -62,12 +122,13 @@ pub fn init_db<P: AsRef<Path>>(path: P) -> Result<Connection> {
     )?;
     conn.execute("CREATE INDEX IF NOT EXISTS idx_name ON files (name)", [])?;
     conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_is_deleted ON files (is_deleted)",
+        [],
+    )?;
+    conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_activity_time ON activity (detected_at)",
         [],
     )?;
-
-    // Stage 4: Add perceptual_hash column to files (silently fails if exists)
-    let _ = conn.execute("ALTER TABLE files ADD COLUMN perceptual_hash TEXT", []);
 
     // Stage 4: Create duplicate_groups table
     conn.execute(
@@ -138,6 +199,10 @@ pub fn init_db<P: AsRef<Path>>(path: P) -> Result<Connection> {
         "ALTER TABLE files ADD COLUMN content_extracted BOOLEAN DEFAULT FALSE",
         [],
     );
+    let _ = conn.execute(
+        "ALTER TABLE files ADD COLUMN extraction_completed BOOLEAN DEFAULT FALSE",
+        [],
+    );
     let _ = conn.execute("ALTER TABLE files ADD COLUMN extracted_text TEXT", []);
     let _ = conn.execute("ALTER TABLE files ADD COLUMN extraction_error TEXT", []);
     let _ = conn.execute(
@@ -145,9 +210,21 @@ pub fn init_db<P: AsRef<Path>>(path: P) -> Result<Connection> {
         [],
     );
 
+    let _ = conn.execute(
+        "UPDATE files SET extraction_completed = content_extracted",
+        [],
+    );
+
+    // Stage 8: Add undo_data_json to operations (silently fails if exists)
+    let _ = conn.execute("ALTER TABLE operations ADD COLUMN undo_data_json TEXT", []);
+
     // Stage 5: Indexes for extraction pipeline queries
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_files_content_extracted ON files (content_extracted)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_files_extraction_completed ON files (extraction_completed)",
         [],
     )?;
     conn.execute(
@@ -185,6 +262,17 @@ pub fn init_db<P: AsRef<Path>>(path: P) -> Result<Connection> {
             trigger TEXT NOT NULL,
             schedule_cron TEXT,
             created_at DATETIME NOT NULL
+        )",
+        [],
+    )?;
+
+    // Stage 8: Rule suggestion feedback
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS rule_suggestion_feedback (
+            id INTEGER PRIMARY KEY,
+            signature TEXT UNIQUE NOT NULL,
+            status TEXT NOT NULL,
+            updated_at DATETIME NOT NULL
         )",
         [],
     )?;
@@ -230,11 +318,85 @@ pub fn init_db<P: AsRef<Path>>(path: P) -> Result<Connection> {
         [],
     )?;
 
+    // Stage 9: Chat Interface & Rule Automation
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS chat_sessions (
+            id INTEGER PRIMARY KEY,
+            started_at DATETIME NOT NULL,
+            last_message_at DATETIME NOT NULL
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY,
+            session_id INTEGER REFERENCES chat_sessions(id),
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            metadata_json TEXT,
+            created_at DATETIME NOT NULL
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS rule_executions (
+            id INTEGER PRIMARY KEY,
+            rule_id INTEGER REFERENCES rules(id),
+            executed_at DATETIME NOT NULL,
+            files_affected INTEGER,
+            success BOOLEAN,
+            error_message TEXT
+        )",
+        [],
+    )?;
+
+    // Check for API Key in environment variables (for development) 
+    // or let the user enter it via settings UI later.
+    if let Ok(api_key) = std::env::var("GEMINI_API_KEY") {
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('gemini_api_key', ?1)",
+            [api_key],
+        )?;
+    }
+
+    // Stage 10: Recent Files table
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS recent_files (
+            file_id INTEGER REFERENCES files(id) ON DELETE CASCADE,
+            accessed_at DATETIME NOT NULL,
+            access_count INTEGER DEFAULT 1,
+            PRIMARY KEY (file_id)
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_recent_files_accessed ON recent_files(accessed_at DESC)",
+        [],
+    )?;
+
+    // Stage 10: Workspaces table
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS workspaces (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            config_json TEXT NOT NULL,
+            created_at DATETIME NOT NULL
+        )",
+        [],
+    )?;
+
     Ok(conn)
 }
 
 pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
-    let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1")?;
+    let mut stmt = conn.prepare_cached("SELECT value FROM settings WHERE key = ?1")?;
     let mut rows = stmt.query([key])?;
 
     if let Some(row) = rows.next()? {
@@ -250,4 +412,66 @@ pub fn save_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
         [key, value],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_conn() -> Connection {
+        init_db(":memory:").expect("in-memory DB should initialize")
+    }
+
+    #[test]
+    fn init_db_creates_tables() {
+        let conn = test_conn();
+        // Verify a few core tables exist by querying sqlite_master
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(tables.contains(&"files".to_string()));
+        assert!(tables.contains(&"settings".to_string()));
+        assert!(tables.contains(&"operations".to_string()));
+        assert!(tables.contains(&"tags".to_string()));
+        assert!(tables.contains(&"rules".to_string()));
+    }
+
+    #[test]
+    fn get_setting_returns_none_for_missing_key() {
+        let conn = test_conn();
+        let val = get_setting(&conn, "nonexistent").unwrap();
+        assert!(val.is_none());
+    }
+
+    #[test]
+    fn save_and_get_setting() {
+        let conn = test_conn();
+        save_setting(&conn, "theme", "dark").unwrap();
+        let val = get_setting(&conn, "theme").unwrap();
+        assert_eq!(val, Some("dark".to_string()));
+    }
+
+    #[test]
+    fn save_setting_upsert() {
+        let conn = test_conn();
+        save_setting(&conn, "lang", "en").unwrap();
+        save_setting(&conn, "lang", "fr").unwrap();
+        let val = get_setting(&conn, "lang").unwrap();
+        assert_eq!(val, Some("fr".to_string()));
+    }
+
+    #[test]
+    fn multiple_settings() {
+        let conn = test_conn();
+        save_setting(&conn, "a", "1").unwrap();
+        save_setting(&conn, "b", "2").unwrap();
+        save_setting(&conn, "c", "3").unwrap();
+        assert_eq!(get_setting(&conn, "a").unwrap(), Some("1".to_string()));
+        assert_eq!(get_setting(&conn, "b").unwrap(), Some("2".to_string()));
+        assert_eq!(get_setting(&conn, "c").unwrap(), Some("3".to_string()));
+    }
 }

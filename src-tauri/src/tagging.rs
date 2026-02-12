@@ -1,8 +1,8 @@
 use crate::db;
-use rusqlite::Connection;
+use log::error;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Tag {
@@ -15,11 +15,13 @@ pub struct Tag {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct TaggingState {
     pub active: Arc<Mutex<bool>>,
 }
 
 impl TaggingState {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             active: Arc::new(Mutex::new(false)),
@@ -28,12 +30,10 @@ impl TaggingState {
 }
 
 pub async fn get_tags_for_file(app: &AppHandle, file_id: i64) -> Result<Vec<Tag>, String> {
-    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let db_path = app_dir.join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(app)?;
 
     let mut stmt = conn
-        .prepare("SELECT id, file_id, tag, source, confidence, created_at FROM tags WHERE file_id = ?1 ORDER BY confidence DESC")
+        .prepare_cached("SELECT id, file_id, tag, source, confidence, created_at FROM tags WHERE file_id = ?1 ORDER BY confidence DESC")
         .map_err(|e| e.to_string())?;
 
     let tags_iter = stmt
@@ -58,9 +58,7 @@ pub async fn get_tags_for_file(app: &AppHandle, file_id: i64) -> Result<Vec<Tag>
 }
 
 pub async fn add_tag(app: &AppHandle, file_id: i64, tag: String, source: String, confidence: f64) -> Result<(), String> {
-    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let db_path = app_dir.join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(app)?;
 
     let normalized_tag = tag.trim().to_lowercase();
     
@@ -84,9 +82,7 @@ pub async fn add_tag(app: &AppHandle, file_id: i64, tag: String, source: String,
 }
 
 pub async fn remove_tag(app: &AppHandle, tag_id: i64) -> Result<(), String> {
-    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let db_path = app_dir.join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(app)?;
 
     conn.execute(
         "DELETE FROM tags WHERE id = ?1",
@@ -97,12 +93,10 @@ pub async fn remove_tag(app: &AppHandle, tag_id: i64) -> Result<(), String> {
 }
 
 pub async fn get_all_unique_tags(app: &AppHandle) -> Result<Vec<String>, String> {
-    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let db_path = app_dir.join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(app)?;
 
     let mut stmt = conn
-        .prepare("SELECT DISTINCT tag FROM tags ORDER BY tag ASC")
+        .prepare_cached("SELECT DISTINCT tag FROM tags ORDER BY tag ASC")
         .map_err(|e| e.to_string())?;
 
     let tags_iter = stmt
@@ -124,12 +118,10 @@ pub struct TagStat {
 }
 
 pub async fn get_tag_stats(app: &AppHandle) -> Result<Vec<TagStat>, String> {
-    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let db_path = app_dir.join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(app)?;
 
     let mut stmt = conn
-        .prepare("SELECT tag, COUNT(*) as count FROM tags GROUP BY tag ORDER BY count DESC LIMIT 50")
+        .prepare_cached("SELECT tag, COUNT(*) as count FROM tags GROUP BY tag ORDER BY count DESC LIMIT 50")
         .map_err(|e| e.to_string())?;
 
     let stats = stmt
@@ -186,14 +178,12 @@ struct OpenAIChoice {
 
 pub async fn generate_tags(app: &AppHandle, file_id: i64) -> Result<Vec<String>, String> {
     // 1. Get file content & settings
-    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let db_path = app_dir.join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(app)?;
 
     // Get settings
     let provider = db::get_setting(&conn, "ai_provider")
         .map_err(|e| e.to_string())?
-        .unwrap_or("local".to_string());
+        .unwrap_or("ollama".to_string());
     
     let ollama_url = db::get_setting(&conn, "ollama_url")
         .map_err(|e| e.to_string())?
@@ -217,7 +207,7 @@ pub async fn generate_tags(app: &AppHandle, file_id: i64) -> Result<Vec<String>,
 
     // 2. Construct Prompt
     let prompt = format!(
-        "Analyze this file and suggest 2-5 relevant tags.\nFilename: {}\nFile type: {}\nContent preview: {}\nExamples of good tags:\n- invoice, receipt, tax-2024\n- vacation-photos, beach, summer-2024\n- python-code, machine-learning, project-xyz\n- resume, job-search, 2024\nReturn ONLY a JSON array of strings, e.g. [\"tag1\", \"tag2\"]. Do NOT wrap in markdown blocks.",
+        "You are an expert file classifier.\n\nReturn ONLY a JSON array of 2-5 short, lowercase tags.\nNo markdown, no extra text.\n\nFilename: {}\nFile type: {}\nContent preview (first 2000 chars): {}\n\nExamples:\n[\"invoice\", \"tax-2024\"]\n[\"python-code\", \"machine-learning\"]\n",
         filename,
         extension.unwrap_or_default(),
         content_preview
@@ -226,7 +216,7 @@ pub async fn generate_tags(app: &AppHandle, file_id: i64) -> Result<Vec<String>,
     let client = reqwest::Client::new();
     let json_response: String;
 
-    if provider == "cloud" {
+    if provider == "openai" || provider == "cloud" {
         if openai_key.is_empty() {
             return Err("OpenAI API key not set".to_string());
         }
@@ -234,7 +224,9 @@ pub async fn generate_tags(app: &AppHandle, file_id: i64) -> Result<Vec<String>,
             .header("Authorization", format!("Bearer {}", openai_key))
             .header("Content-Type", "application/json")
             .json(&OpenAIRequest {
-                model: "gpt-4o-mini".to_string(),
+                model: db::get_setting(&conn, "ai_tag_model")
+                    .map_err(|e| e.to_string())?
+                    .unwrap_or("gpt-4o-mini".to_string()),
                 messages: vec![
                     OpenAIMessage { role: "system".to_string(), content: "You are a helpful assistant that generates tags for files. Return only JSON array.".to_string() },
                     OpenAIMessage { role: "user".to_string(), content: prompt },
@@ -254,12 +246,9 @@ pub async fn generate_tags(app: &AppHandle, file_id: i64) -> Result<Vec<String>,
 
     } else {
         // Local (Ollama)
-        let model = db::get_setting(&conn, "embedding_model") 
+        let gen_model = db::get_setting(&conn, "ai_tag_model")
             .map_err(|e| e.to_string())?
             .unwrap_or("llama3".to_string());
-            
-        // Fallback logic if model name assumes embedding model
-        let gen_model = if model.contains("embed") { "mistral".to_string() } else { model };
 
         let res = client.post(format!("{}/api/generate", ollama_url))
             .json(&OllamaRequest {
@@ -303,14 +292,12 @@ pub async fn auto_tag_file(app: &AppHandle, file_id: i64) -> Result<(), String> 
 }
 
 pub async fn get_tags_for_directory(app: &AppHandle, parent_path: String) -> Result<std::collections::HashMap<String, Vec<Tag>>, String> {
-    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let db_path = app_dir.join("filenova.db");
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::get_conn(app)?;
 
     // Join files and tags
     // We match on parent_path in files table
     let mut stmt = conn
-        .prepare(
+        .prepare_cached(
             "SELECT f.name, t.id, t.file_id, t.tag, t.source, t.confidence, t.created_at 
              FROM files f
              JOIN tags t ON f.id = t.file_id
@@ -352,17 +339,22 @@ pub fn start_auto_tagging_task(app: AppHandle, file_ids: Vec<i64>) {
         let mut success_count = 0;
         let mut fail_count = 0;
 
-        for file_id in file_ids {
-             match auto_tag_file(&app, file_id).await {
-                 Ok(_) => {
-                     success_count += 1;
-                     let _ = app.emit("tagging-progress", success_count);
-                 }
-                 Err(e) => {
-                     eprintln!("Failed to tag file {}: {}", file_id, e);
-                     fail_count += 1;
-                 }
-             }
+        for batch in file_ids.chunks(50) {
+            for file_id in batch {
+                match auto_tag_file(&app, *file_id).await {
+                    Ok(_) => {
+                        success_count += 1;
+                        let _ = app.emit("tagging-progress", success_count);
+                    }
+                    Err(e) => {
+                        error!("Failed to tag file {}: {}", file_id, e);
+                        fail_count += 1;
+                    }
+                }
+            }
+
+            // Basic rate limiting between batches
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
 
         let _ = app.emit("tagging-finished", (success_count, fail_count));

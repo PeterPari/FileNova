@@ -1,5 +1,6 @@
+use crate::long_path::safe_path;
 use rayon::prelude::*;
-use rusqlite::{params, Connection};
+use rusqlite::{params, params_from_iter, Connection};
 use std::fs;
 use std::path::Path;
 use std::sync::{
@@ -62,7 +63,12 @@ struct FileToProcess {
     extracted_text: Option<String>, // Already extracted but needs embedding
 }
 
-pub fn start_extraction(app: AppHandle, state: ExtractionState, vector_store: Arc<VectorStore>) {
+pub fn start_extraction(
+    app: AppHandle,
+    state: ExtractionState,
+    vector_store: Arc<VectorStore>,
+    file_ids: Option<Vec<i64>>,
+) {
     if state.is_extracting.swap(true, Ordering::SeqCst) {
         // If already running, ensure it's not paused? Or just let it be?
         // Let's unpause if start is called again, or just return.
@@ -81,25 +87,49 @@ pub fn start_extraction(app: AppHandle, state: ExtractionState, vector_store: Ar
 
         // Fetch files needing extraction OR embedding
         let files: Vec<FileToProcess> = {
-            let mut stmt = conn.prepare(
-                "SELECT id, path, extension, extracted_text FROM files
-                 WHERE is_directory = 0
-                   AND (content_extracted = FALSE
-                        OR (content_extracted = TRUE AND embedding_generated = FALSE AND extracted_text IS NOT NULL))
-                 ORDER BY size_bytes ASC"
-            ).expect("Failed to prepare extraction query");
+            let base_sql = "SELECT id, path, extension, extracted_text FROM files\
+                 WHERE is_directory = 0\
+                   AND (extraction_completed = FALSE\
+                        OR (extraction_completed = TRUE AND embedding_generated = FALSE AND extracted_text IS NOT NULL))";
 
-            stmt.query_map([], |row| {
+            let (sql, params): (String, Vec<i64>) = if let Some(ids) = file_ids.clone() {
+                if !ids.is_empty() {
+                    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                    (
+                        format!("{} AND id IN ({}) ORDER BY size_bytes ASC", base_sql, placeholders),
+                        ids,
+                    )
+                } else {
+                    (format!("{} ORDER BY size_bytes ASC", base_sql), vec![])
+                }
+            } else {
+                (format!("{} ORDER BY size_bytes ASC", base_sql), vec![])
+            };
+
+            let mut stmt = conn.prepare(&sql).expect("Failed to prepare extraction query");
+
+            let mapper = |row: &rusqlite::Row| -> rusqlite::Result<FileToProcess> {
                 Ok(FileToProcess {
                     id: row.get(0)?,
                     path: row.get(1)?,
                     extension: row.get(2)?,
                     extracted_text: row.get(3)?,
                 })
-            })
-            .expect("Failed to query files")
-            .filter_map(|r| r.ok())
-            .collect()
+            };
+
+            let collected: Vec<FileToProcess> = if params.is_empty() {
+                stmt.query_map([], mapper)
+                    .expect("Failed to query files")
+                    .filter_map(|r| r.ok())
+                    .collect()
+            } else {
+                stmt.query_map(params_from_iter(params), mapper)
+                    .expect("Failed to query files")
+                    .filter_map(|r| r.ok())
+                    .collect()
+            };
+
+            collected
         };
 
         let total = files.len() as u64;
@@ -115,8 +145,8 @@ pub fn start_extraction(app: AppHandle, state: ExtractionState, vector_store: Ar
         let config = EmbeddingConfig::from_settings(&conn);
         let client = reqwest::Client::new();
 
-        // Process in batches of 20
-        for batch in files.chunks(20) {
+        // Process in batches of 100
+        for batch in files.chunks(100) {
             // Check stop signal
             if !state.is_extracting.load(Ordering::SeqCst) {
                 break;
@@ -152,13 +182,13 @@ pub fn start_extraction(app: AppHandle, state: ExtractionState, vector_store: Ar
                     match result {
                         Ok(text) => {
                             let _ = tx.execute(
-                                "UPDATE files SET extracted_text = ?1, content_extracted = TRUE, extraction_error = NULL WHERE id = ?2",
+                                "UPDATE files SET extracted_text = ?1, content_extracted = TRUE, extraction_completed = TRUE, extraction_error = NULL WHERE id = ?2",
                                 params![text, file_id],
                             );
                         }
                         Err(err) => {
                             let _ = tx.execute(
-                                "UPDATE files SET content_extracted = TRUE, extraction_error = ?1 WHERE id = ?2",
+                                "UPDATE files SET content_extracted = TRUE, extraction_completed = TRUE, extraction_error = ?1 WHERE id = ?2",
                                 params![err, file_id],
                             );
                         }
@@ -204,12 +234,15 @@ pub fn start_extraction(app: AppHandle, state: ExtractionState, vector_store: Ar
                 if let Some(text) = text {
                     if !text.is_empty() {
                         // Chunk and embed
-                        let chunks =
-                            embeddings::chunk_text(&text, config.chunk_size, config.chunk_overlap);
+                        let chunks = embeddings::chunk_text_with_offsets(
+                            &text,
+                            config.chunk_size,
+                            config.chunk_overlap,
+                        );
                         let mut embedding_chunks = Vec::new();
                         let mut embed_ok = true;
 
-                        for (i, chunk_text) in chunks.iter().enumerate() {
+                        for (i, (chunk_text, char_offset)) in chunks.iter().enumerate() {
                             let embed_result = tauri::async_runtime::block_on(
                                 embeddings::generate_embedding(&client, &config, chunk_text),
                             );
@@ -221,6 +254,7 @@ pub fn start_extraction(app: AppHandle, state: ExtractionState, vector_store: Ar
                                         file_path: f.path.clone(),
                                         chunk_index: i as u32,
                                         chunk_text: chunk_text.clone(),
+                                        char_offset: *char_offset,
                                         embedding: vector,
                                     });
                                 }
@@ -287,12 +321,12 @@ fn extract_text(path: &Path, extension: &str) -> Result<String, String> {
 
 fn extract_pdf(path: &Path) -> Result<String, String> {
     // Skip files larger than 50MB
-    let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
+    let metadata = fs::metadata(safe_path(path)).map_err(|e| e.to_string())?;
     if metadata.len() > 50 * 1024 * 1024 {
         return Err("PDF too large (>50MB)".into());
     }
 
-    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    let bytes = fs::read(safe_path(path)).map_err(|e| e.to_string())?;
     let text = pdf_extract::extract_text_from_mem(&bytes).map_err(|e| e.to_string())?;
 
     // Truncate to 100k chars
@@ -300,12 +334,12 @@ fn extract_pdf(path: &Path) -> Result<String, String> {
 }
 
 fn extract_docx(path: &Path) -> Result<String, String> {
-    let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
+    let metadata = fs::metadata(safe_path(path)).map_err(|e| e.to_string())?;
     if metadata.len() > 50 * 1024 * 1024 {
         return Err("DOCX too large (>50MB)".into());
     }
 
-    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    let bytes = fs::read(safe_path(path)).map_err(|e| e.to_string())?;
     let docx = docx_rs::read_docx(&bytes).map_err(|e| e.to_string())?;
 
     let mut text = String::new();
@@ -328,26 +362,26 @@ fn extract_docx(path: &Path) -> Result<String, String> {
 }
 
 fn extract_plaintext(path: &Path) -> Result<String, String> {
-    let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
+    let metadata = fs::metadata(safe_path(path)).map_err(|e| e.to_string())?;
     let size = metadata.len();
 
     // Cap at 1MB
     if size > 1024 * 1024 {
         // Read only first 1MB
         use std::io::Read;
-        let file = fs::File::open(path).map_err(|e| e.to_string())?;
+        let file = fs::File::open(safe_path(path)).map_err(|e| e.to_string())?;
         let mut reader = std::io::BufReader::new(file);
         let mut buf = vec![0u8; 1024 * 1024];
         let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
         buf.truncate(n);
         String::from_utf8(buf).map_err(|_| "Not valid UTF-8".into())
     } else {
-        fs::read_to_string(path).map_err(|e| e.to_string())
+        fs::read_to_string(safe_path(path)).map_err(|e| e.to_string())
     }
 }
 
 fn extract_exif(path: &Path) -> Result<String, String> {
-    let file = fs::File::open(path).map_err(|e| e.to_string())?;
+    let file = fs::File::open(safe_path(path)).map_err(|e| e.to_string())?;
     let mut bufreader = std::io::BufReader::new(file);
     let exifreader = exif::Reader::new();
     let exif_data = exifreader

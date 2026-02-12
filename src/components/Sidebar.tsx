@@ -1,106 +1,161 @@
-import { HardDrive, Folder, Settings, BarChart2, Copy, Activity } from 'lucide-react';
+import { 
+    HardDrive, Folder, Settings, BarChart2, Copy, Activity, Cog, Trash2, 
+    MessageSquare, Boxes, GraduationCap, PanelLeft
+} from 'lucide-react';
 import { useFileStore } from '../store/fileStore';
+import { useState } from 'react';
+import { FileNovaLogo } from './FileNovaLogo';
 
-export const Sidebar = ({ onOpenSettings }: { onOpenSettings: () => void }) => {
+interface SidebarProps {
+    onOpenSettings: () => void;
+}
+
+export const Sidebar = ({ onOpenSettings }: SidebarProps) => {
     const { setCurrentView, currentView } = useFileStore();
+    const [collapsed, setCollapsed] = useState(false);
+
+    const toggleCollapse = () => setCollapsed(!collapsed);
+
+    const navItems = [
+        { id: 'browser', label: 'My Files', icon: HardDrive, action: () => setCurrentView('browser') },
+        { id: 'documents', label: 'Documents', icon: Folder, action: () => setCurrentView('browser') },
+    ];
+
+    const toolsItems = [
+        { id: 'dashboard', label: 'Dashboard', icon: BarChart2, action: () => setCurrentView('dashboard') },
+        { id: 'duplicates', label: 'Duplicates', icon: Copy, action: () => setCurrentView('duplicates') },
+        { id: 'organize', label: 'Organize', icon: Boxes, action: () => setCurrentView('organize') },
+        { id: 'rules', label: 'Rules', icon: Cog, action: () => setCurrentView('rules') },
+        { id: 'activity', label: 'Activity', icon: Activity, action: () => setCurrentView('activity') },
+    ];
+
+    const assistantItems = [
+        { id: 'chat', label: 'Assistant', icon: MessageSquare, action: () => setCurrentView('chat') },
+    ];
+
+    const NavItem = ({ item, isActive }: { item: any; isActive: boolean }) => (
+        <button
+            onClick={item.action}
+            title={collapsed ? item.label : ''}
+            className={`
+                flex items-center w-full p-2 mb-1 rounded-md transition-all duration-200
+                ${isActive 
+                    ? 'bg-surface-active text-primary font-medium border-l-2 border-accent-primary' 
+                    : 'text-secondary hover:bg-surface-hover hover:text-primary border-l-2 border-transparent'}
+                ${collapsed ? 'justify-center px-0 border-l-0' : 'px-3 gap-3'}
+            `}
+        >
+            <item.icon size={20} className={isActive ? 'text-accent-primary' : ''} />
+            {!collapsed && <span>{item.label}</span>}
+        </button>
+    );
 
     return (
-        <aside className="w-64 bg-gray-50 dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 p-4 h-full flex flex-col">
-            <h2 className="text-sm font-semibold text-gray-500 uppercase mb-4">Drives</h2>
-            <ul className="space-y-1">
-                {/* Mock drives */}
-                <li>
-                    <button
-                        onClick={() => {
-                            setCurrentView('browser');
-                            // Ideally navigate to C: root
-                            // setCurrentPath('C:'); 
-                            // We need to destructure setCurrentPath from store
-                        }}
-                        className={`flex items-center gap-2 p-2 w-full text-left rounded-md ${currentView === 'browser' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+        <aside 
+            className={`
+                flex flex-col h-full bg-surface border-r border-base transition-all duration-300 ease-elastic
+                ${collapsed ? 'w-16' : 'w-64'}
+            `}
+        >
+            {/* Header / Logo */}
+            <div className={`flex items-center h-16 border-b border-base px-4 ${collapsed ? 'justify-center' : 'justify-between'}`}>
+                {!collapsed ? (
+                    <FileNovaLogo withText={true} />
+                ) : (
+                   <FileNovaLogo withText={false} className="w-8 h-8" />
+                )}
+                
+                {!collapsed && (
+                    <button 
+                        onClick={toggleCollapse}
+                        className="p-1.5 rounded-md hover:bg-surface-hover text-secondary transition-colors"
                     >
-                        <HardDrive size={18} />
-                        <span>C: Local Disk</span>
+                        <PanelLeft size={18} />
                     </button>
-                </li>
-            </ul>
+                )}
+            </div>
+            
+            {collapsed && (
+                <div className="flex justify-center py-2 border-b border-base">
+                     <button 
+                        onClick={toggleCollapse}
+                        className="p-1.5 rounded-md hover:bg-surface-hover text-secondary transition-colors"
+                    >
+                        <PanelLeft size={18} />
+                    </button>
+                </div>
+            )}
 
-            <h2 className="text-sm font-semibold text-gray-500 uppercase mt-6 mb-4">Quick Access</h2>
-            <ul className="space-y-1 flex-1">
-                <li>
-                    <button
-                        onClick={() => {
-                            // Open Documents in new tab or current? 
-                            // Navigation from sidebar usually switches current view or opens new tab?
-                            // Let's make it simple: navigate current tab.
-                            // But wait, sidebar "Drives" and "Documents" act as shortcuts.
-                            // If we use `setCurrentPath`, it updates current tab.
-                            // Let's use `setCurrentPath` which now updates the active tab.
-                            // However, we need to import it.
-                            // Sidebar uses `setCurrentView` mostly.
-                            // For "Documents", we should probably navigate.
-                            // Let's assume there is a `setCurrentPath` exposed.
-                            // Sidebar currently only implements view switching.
-                            // Let's keep view switching but maybe add a "Home" or "Documents" navigation if needed.
-                            // Current Sidebar implementation just switches `currentView`.
-                            // "C: Local Disk" sets view to browser.
-                            // We should probably also set path to C:?
-                            // For now, let's just ensure it switches to browser view.
-                            setCurrentView('browser');
-                        }}
-                        className="flex items-center gap-2 p-2 w-full text-left hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md"
-                    >
-                        <Folder size={18} />
-                        <span>Documents</span>
-                    </button>
-                </li>
-                <li>
-                    <button
-                        onClick={() => setCurrentView('dashboard')}
-                        className={`flex items-center gap-2 p-2 w-full text-left rounded-md ${currentView === 'dashboard' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}
-                    >
-                        <BarChart2 size={18} />
-                        <span>Dashboard</span>
-                    </button>
-                </li>
-                <li>
-                    <button
-                        onClick={() => setCurrentView('duplicates')}
-                        className={`flex items-center gap-2 p-2 w-full text-left rounded-md ${currentView === 'duplicates' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}
-                    >
-                        <Copy size={18} />
-                        <span>Duplicates</span>
-                    </button>
-                </li>
-                <li>
-                    <button
-                        onClick={() => setCurrentView('activity')}
-                        className={`flex items-center gap-2 p-2 w-full text-left rounded-md ${currentView === 'activity' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}
-                    >
-                        <Activity size={18} />
-                        <span>Activity</span>
-                    </button>
-                </li>
-                <li>
-                    <button
-                        onClick={() => setCurrentView('organize')}
-                        className={`flex items-center gap-2 p-2 w-full text-left rounded-md ${currentView === 'organize' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}
-                    >
-                        <Folder size={18} className="text-purple-500" />
-                        <span>Organize</span>
-                    </button>
-                </li>
-            </ul>
+            {/* Scrollable Content */}
+            <div className="flex-1 overflow-y-auto py-6 px-3 custom-scrollbar space-y-8">
+                
+                {/* Main Navigation */}
+                <div>
+                    {!collapsed && <h3 className="text-xs font-semibold text-muted uppercase tracking-wider mb-3 px-3">Drives</h3>}
+                    <ul className="space-y-0.5">
+                        {navItems.map(item => (
+                            <li key={item.id}>
+                                <NavItem item={item} isActive={currentView === item.id || (item.id === 'browser' && currentView === 'browser')} />
+                            </li>
+                        ))}
+                    </ul>
+                </div>
 
-            <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+                {/* Tools */}
+                <div>
+                    {!collapsed && <h3 className="text-xs font-semibold text-muted uppercase tracking-wider mb-3 px-3">Tools</h3>}
+                    <ul className="space-y-0.5">
+                        {toolsItems.map(item => (
+                            <li key={item.id}>
+                                <NavItem item={item} isActive={currentView === item.id} />
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+
+                {/* Assistant */}
+                <div>
+                    {!collapsed && <h3 className="text-xs font-semibold text-muted uppercase tracking-wider mb-3 px-3">AI Engine</h3>}
+                    <ul className="space-y-0.5">
+                        {assistantItems.map(item => (
+                            <li key={item.id}>
+                                <NavItem item={item} isActive={currentView === item.id} />
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            </div>
+
+            {/* Footer / Settings */}
+            <div className="p-3 border-t border-base bg-surface-hover/30">
+                <button
+                    onClick={() => setCurrentView('trash')}
+                    className={`
+                        flex items-center w-full p-2 mb-1 rounded-md transition-all duration-200
+                        ${currentView === 'trash' 
+                            ? 'bg-red-50 dark:bg-red-900/20 text-status-error font-medium' 
+                            : 'text-secondary hover:bg-surface-hover hover:text-status-error'}
+                        ${collapsed ? 'justify-center' : 'px-3 gap-3'}
+                    `}
+                    title={collapsed ? "Trash" : ""}
+                >
+                    <Trash2 size={20} />
+                    {!collapsed && <span>Trash</span>}
+                </button>
                 <button
                     onClick={onOpenSettings}
-                    className="flex items-center gap-2 p-2 w-full text-left hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md text-gray-600 dark:text-gray-300"
+                    className={`
+                        flex items-center w-full p-2 rounded-md transition-all duration-200
+                        text-secondary hover:bg-surface-hover hover:text-primary
+                        ${collapsed ? 'justify-center' : 'px-3 gap-3'}
+                    `}
+                    title={collapsed ? "Settings" : ""}
                 >
-                    <Settings size={18} />
-                    <span>Settings</span>
+                    <Settings size={20} />
+                    {!collapsed && <span>Settings</span>}
                 </button>
             </div>
         </aside>
     );
 };
+

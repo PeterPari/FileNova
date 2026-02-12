@@ -10,6 +10,18 @@ interface SuggestionEditorProps {
 const SuggestionEditor: React.FC<SuggestionEditorProps> = ({ initialPlan, onSave, onCancel }) => {
     const [moves, setMoves] = useState<FileMove[]>(initialPlan.moves);
 
+    const getParentPath = (path: string) => path.replace(/[/\\][^/\\]*$/, '');
+    const getFileName = (path: string) => path.split(/[/\\]/).pop() || path;
+    const joinPath = (base: string, name: string) => {
+        const sep = base.includes('\\') ? '\\' : '/';
+        const trimmed = base.replace(/[\\/]+$/, '');
+        return `${trimmed}${sep}${name}`;
+    };
+
+    const destinationFolders = Array.from(
+        new Set(moves.map((move) => getParentPath(move.new_path)).filter(Boolean))
+    );
+
     const handleRemoveMove = (index: number) => {
         setMoves(prev => prev.filter((_, i) => i !== index));
     };
@@ -35,6 +47,65 @@ const SuggestionEditor: React.FC<SuggestionEditorProps> = ({ initialPlan, onSave
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                        <div className="bg-gray-800 rounded-lg border border-gray-700 p-4">
+                            <div className="text-xs text-gray-400 uppercase tracking-wider mb-3">Files</div>
+                            <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar">
+                                {moves.map((move, idx) => (
+                                    <div
+                                        key={idx}
+                                        draggable
+                                        onDragStart={(e) => {
+                                            e.dataTransfer.setData('text/plain', String(idx));
+                                        }}
+                                        className="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 cursor-move"
+                                        title={move.file_path}
+                                    >
+                                        {getFileName(move.file_path)}
+                                    </div>
+                                ))}
+                                {moves.length === 0 && (
+                                    <div className="text-gray-500 text-sm">No files in this plan.</div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="bg-gray-800 rounded-lg border border-gray-700 p-4">
+                            <div className="text-xs text-gray-400 uppercase tracking-wider mb-3">Destinations</div>
+                            <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar">
+                                {destinationFolders.map((folder) => (
+                                    <div
+                                        key={folder}
+                                        onDragOver={(e) => e.preventDefault()}
+                                        onDrop={(e) => {
+                                            const idx = Number(e.dataTransfer.getData('text/plain'));
+                                            if (Number.isNaN(idx)) return;
+                                            setMoves((prev) => {
+                                                const next = [...prev];
+                                                const fileName = getFileName(next[idx].file_path);
+                                                next[idx] = {
+                                                    ...next[idx],
+                                                    new_path: joinPath(folder, fileName),
+                                                };
+                                                return next;
+                                            });
+                                        }}
+                                        className="bg-gray-900 border border-dashed border-gray-600 rounded px-3 py-2 text-xs text-gray-300"
+                                        title={folder}
+                                    >
+                                        {folder}
+                                    </div>
+                                ))}
+                                {destinationFolders.length === 0 && (
+                                    <div className="text-gray-500 text-sm">No destination folders yet.</div>
+                                )}
+                            </div>
+                            <div className="text-[10px] text-gray-500 mt-2">
+                                Drag files onto a destination to update their target folder.
+                            </div>
+                        </div>
+                    </div>
+
                     <div className="space-y-4">
                         {moves.map((move, idx) => (
                             <div key={idx} className="flex gap-4 items-start bg-gray-800 p-3 rounded border border-gray-700">

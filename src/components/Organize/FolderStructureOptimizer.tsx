@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { FileTree } from './FileTree';
+import { FileTree, DirectoryNode } from './FileTree';
+import { SuggestionPlan } from './SuggestionCard';
+import SuggestionPreview from './SuggestionPreview';
+import SuggestionEditor from './SuggestionEditor';
+import ProposedTree from './ProposedTree';
+import { Toast } from '../Toast';
 
 interface StructureAnalysis {
     path: string;
@@ -13,22 +18,20 @@ interface StructureAnalysis {
     huge_files: [string, number][];
 }
 
-interface DirectoryNode {
-    name: string;
-    path: string;
-    children: DirectoryNode[];
-    is_directory: boolean;
-    size: number;
-    file_count: number;
-}
-
 const FolderStructureOptimizer: React.FC = () => {
     const [path, setPath] = useState('');
     const [analysis, setAnalysis] = useState<StructureAnalysis | null>(null);
     const [treeData, setTreeData] = useState<DirectoryNode | null>(null);
+    const [proposal, setProposal] = useState<SuggestionPlan | null>(null);
+    const [isEditing, setIsEditing] = useState(false);
+
     const [loading, setLoading] = useState(false);
+    const [generatingProposal, setGeneratingProposal] = useState(false);
+    const [applying, setApplying] = useState(false);
+
     const [error, setError] = useState('');
-    const [activeTab, setActiveTab] = useState<'analysis' | 'tree'>('analysis');
+    const [activeTab, setActiveTab] = useState<'analysis' | 'tree' | 'proposal'>('analysis');
+    const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
     const handleAnalyze = async () => {
         if (!path) return;
@@ -36,11 +39,13 @@ const FolderStructureOptimizer: React.FC = () => {
         setError('');
         setAnalysis(null);
         setTreeData(null);
+        setProposal(null);
+        setActiveTab('analysis');
 
         try {
             const [res, tree] = await Promise.all([
                 invoke<StructureAnalysis>('get_folder_structure_analysis', { path }),
-                invoke<DirectoryNode>('get_directory_tree', { path, maxDepth: 3 })
+                invoke<DirectoryNode>('get_directory_tree', { path, max_depth: 3 })
             ]);
             setAnalysis(res);
             setTreeData(tree);
@@ -48,6 +53,36 @@ const FolderStructureOptimizer: React.FC = () => {
             setError(String(e));
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleGenerateProposal = async () => {
+        if (!path) return;
+        setGeneratingProposal(true);
+        setError('');
+        try {
+            const plan = await invoke<SuggestionPlan>('get_structure_proposal', { path });
+            setProposal(plan);
+            setActiveTab('proposal');
+        } catch (e) {
+            setError("AI Proposal Failed: " + String(e));
+        } finally {
+            setGeneratingProposal(false);
+        }
+    };
+
+    const handleApplyProposal = async () => {
+        if (!proposal) return;
+        setApplying(true);
+        try {
+            await invoke('apply_structure_plan', { plan: proposal });
+            setToast({ message: "Organization plan applied successfully!", type: 'success' });
+            // Refresh analysis
+            handleAnalyze();
+        } catch (e) {
+            setToast({ message: "Failed to apply plan: " + e, type: 'error' });
+        } finally {
+            setApplying(false);
         }
     };
 
@@ -63,7 +98,7 @@ const FolderStructureOptimizer: React.FC = () => {
     };
 
     return (
-        <div className="bg-gray-800 rounded-xl p-6 border border-gray-700 shadow-lg mt-8">
+        <div className="bg-gray-800 rounded-xl p-6 border border-gray-700 shadow-lg mt-8 mb-12">
             <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
                 <span>🏗️</span> Folder Structure Optimizer
             </h2>
@@ -87,7 +122,7 @@ const FolderStructureOptimizer: React.FC = () => {
 
             {error && (
                 <div className="bg-red-900/30 border border-red-800 text-red-300 p-4 rounded-lg mb-4">
-                    Error: {error}
+                    {error}
                 </div>
             )}
 
@@ -104,11 +139,17 @@ const FolderStructureOptimizer: React.FC = () => {
                             className={`px-4 py-2 font-medium text-sm ${activeTab === 'tree' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-400 hover:text-white'}`}
                             onClick={() => setActiveTab('tree')}
                         >
-                            Directory Tree
+                            Current Structure
+                        </button>
+                        <button
+                            className={`px-4 py-2 font-medium text-sm ${activeTab === 'proposal' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-400 hover:text-white'}`}
+                            onClick={() => setActiveTab('proposal')}
+                        >
+                            AI Proposal
                         </button>
                     </div>
 
-                    {activeTab === 'analysis' ? (
+                    {activeTab === 'analysis' && (
                         <div className="space-y-6">
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                                 <div className="bg-gray-700/50 p-4 rounded-lg text-center">
@@ -156,9 +197,9 @@ const FolderStructureOptimizer: React.FC = () => {
                                     </div>
                                 </div>
 
-                                <div className="bg-gray-900 rounded-lg p-4 border border-gray-700">
+                                <div className="bg-gray-900 rounded-lg p-4 border border-gray-700 flex flex-col">
                                     <h3 className="text-gray-400 font-bold mb-3 uppercase text-xs tracking-wider">Suggestions</h3>
-                                    <ul className="space-y-2">
+                                    <ul className="space-y-2 flex-1">
                                         {analysis.suggestions.map((s, i) => (
                                             <li key={i} className="flex gap-2 text-sm text-yellow-300">
                                                 <span>💡</span>
@@ -169,13 +210,30 @@ const FolderStructureOptimizer: React.FC = () => {
                                             <li className="text-gray-500 italic">No specific suggestions. Folder looks okay.</li>
                                         )}
                                     </ul>
+
+                                    <button
+                                        onClick={handleGenerateProposal}
+                                        disabled={generatingProposal}
+                                        className="mt-4 w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white py-2 rounded-lg font-bold flex items-center justify-center gap-2 shadow-lg shadow-purple-900/20 disabled:opacity-50"
+                                    >
+                                        {generatingProposal ? (
+                                            <>
+                                                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                                Generating AI Proposal...
+                                            </>
+                                        ) : (
+                                            <>
+                                                <span>✨</span> Generate Reorganization Plan
+                                            </>
+                                        )}
+                                    </button>
                                 </div>
                             </div>
 
                             {analysis.huge_files.length > 0 && (
                                 <div className="bg-gray-900 rounded-lg p-4 border border-gray-700">
                                     <h3 className="text-gray-400 font-bold mb-3 uppercase text-xs tracking-wider">Large Files</h3>
-                                    <div className="space-y-2 max-h-40 overflow-y-auto">
+                                    <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
                                         {analysis.huge_files.map(([name, size], idx) => (
                                             <div key={idx} className="flex justify-between text-sm">
                                                 <span className="text-gray-300 truncate pr-4">{name}</span>
@@ -186,7 +244,9 @@ const FolderStructureOptimizer: React.FC = () => {
                                 </div>
                             )}
                         </div>
-                    ) : (
+                    )}
+
+                    {activeTab === 'tree' && (
                         <div className="bg-gray-900 rounded-lg p-4 border border-gray-700 h-[500px] overflow-y-auto custom-scrollbar">
                             {treeData ? (
                                 <FileTree node={treeData} />
@@ -195,7 +255,82 @@ const FolderStructureOptimizer: React.FC = () => {
                             )}
                         </div>
                     )}
+
+                    {activeTab === 'proposal' && (
+                        <div className="space-y-4">
+                            {proposal ? (
+                                <>
+                                    <div className="bg-blue-900/30 border border-blue-800 p-4 rounded-lg">
+                                        <h3 className="font-bold text-blue-300 mb-2">AI Strategy</h3>
+                                        <p className="text-gray-300 text-sm">{proposal.reason}</p>
+                                        <div className="mt-2 text-xs text-gray-400">
+                                            {proposal.moves.length} file operations proposed
+                                        </div>
+                                    </div>
+
+                                    {treeData && <ProposedTree originalTree={treeData} moves={proposal.moves} />}
+
+                                    <div className="mt-4">
+                                        <h3 className="text-sm font-bold text-gray-400 mb-2 uppercase tracking-wider">Detailed Move Plan</h3>
+                                        <SuggestionPreview moves={proposal.moves} />
+                                    </div>
+
+                                    <div className="flex justify-end gap-3 pt-4 border-t border-gray-700">
+                                        <button
+                                            onClick={() => setIsEditing(true)}
+                                            className="px-4 py-2 text-gray-300 hover:text-white"
+                                        >
+                                            Modify Plan
+                                        </button>
+                                        <button
+                                            onClick={() => setProposal(null)}
+                                            className="px-4 py-2 text-gray-400 hover:text-white"
+                                        >
+                                            Discard
+                                        </button>
+                                        <button
+                                            onClick={handleApplyProposal}
+                                            disabled={applying}
+                                            className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg font-bold shadow-lg shadow-green-900/20 disabled:opacity-50 flex items-center gap-2"
+                                        >
+                                            {applying ? 'Applying...' : 'Apply Plan'}
+                                        </button>
+                                    </div>
+                                </>
+                            ) : (
+                                <div className="text-center py-12 text-gray-500 border-2 border-dashed border-gray-700 rounded-xl">
+                                    <span className="text-4xl block mb-2">🤖</span>
+                                    <p>No proposal generated yet.</p>
+                                    <button
+                                        onClick={handleGenerateProposal}
+                                        className="text-blue-400 hover:underline mt-2"
+                                    >
+                                        Generate one now
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
+            )}
+
+            {proposal && isEditing && (
+                <SuggestionEditor
+                    initialPlan={proposal}
+                    onSave={(updatedPlan) => {
+                        setProposal(updatedPlan);
+                        setIsEditing(false);
+                    }}
+                    onCancel={() => setIsEditing(false)}
+                />
+            )}
+
+            {toast && (
+                <Toast
+                    message={toast.message}
+                    type={toast.type}
+                    onClose={() => setToast(null)}
+                />
             )}
         </div>
     );

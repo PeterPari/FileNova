@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
+import { getParentPath, getPathLabel } from '../utils/path';
 
 export interface FileEntry {
     name: string;
@@ -26,6 +27,8 @@ export interface IndexStatus {
     processed_files: number;
     current_path: string;
     is_indexing: boolean;
+    percentage_complete: number;
+    estimated_time_remaining_secs: number;
 }
 
 // Stage 5: Content Extraction & Semantic Search types
@@ -63,6 +66,8 @@ export interface HybridSearchResult {
     semantic_score?: number;
     combined_score: number;
     snippet?: string;
+    chunk_index?: number;
+    char_offset?: number;
     source: string;
 }
 
@@ -98,6 +103,7 @@ export interface Rule {
     action_json: string;
     enabled: boolean;
     trigger: string;
+    schedule_cron?: string | null;
 }
 
 interface FileStore {
@@ -107,8 +113,9 @@ interface FileStore {
     sortField: 'name' | 'size' | 'date' | 'type';
     sortDirection: 'asc' | 'desc';
 
-    currentView: 'browser' | 'dashboard' | 'duplicates' | 'semantic-search' | 'activity' | 'organize';
-    selectedFile: FileEntry | null;
+    currentView: 'browser' | 'dashboard' | 'duplicates' | 'semantic-search' | 'activity' | 'organize' | 'rules' | 'trash' | 'chat';
+    selectedFile: FileEntry | null; // Primary selection (last clicked)
+    selectedFiles: FileEntry[]; // All selected files
     previewInfo: FileInfo | null;
     isLoading: boolean;
     error: string | null;
@@ -123,8 +130,10 @@ interface FileStore {
 
     // Sort helper
     getSortedFiles: () => FileEntry[];
-    setCurrentView: (view: 'browser' | 'dashboard' | 'duplicates' | 'semantic-search' | 'activity' | 'organize') => void;
-    selectFile: (file: FileEntry | null) => Promise<void>;
+    setCurrentView: (view: 'browser' | 'dashboard' | 'duplicates' | 'semantic-search' | 'activity' | 'organize' | 'rules' | 'trash' | 'chat') => void;
+    selectFile: (file: FileEntry | null, multi?: boolean, range?: boolean) => Promise<void>;
+    selectAll: () => void;
+    clearSelection: () => void;
     navigateUp: () => Promise<void>;
 
     // Tabs
@@ -179,6 +188,18 @@ interface FileStore {
     loadRules: () => Promise<void>;
     saveRule: (rule: Rule) => Promise<void>;
     deleteRule: (ruleId: number) => Promise<void>;
+
+    // Stage 10: Preview & Power Features
+    previewPanelOpen: boolean;
+    quickLookOpen: boolean;
+    commandPaletteOpen: boolean;
+    shortcutsCheatSheetOpen: boolean;
+    
+    togglePreviewPanel: () => void;
+    openQuickLook: () => void;
+    closeQuickLook: () => void;
+    toggleCommandPalette: () => void;
+    toggleShortcutsCheatSheet: () => void;
 }
 
 export const useFileStore = create<FileStore>((set, get) => ({
@@ -190,6 +211,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
 
     currentView: 'browser',
     selectedFile: null,
+    selectedFiles: [],
     previewInfo: null,
     isLoading: false,
     error: null,
@@ -204,7 +226,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
         const { tabs } = get();
         const newTab = {
             path,
-            label: path ? path.split(/[/\\]/).pop() || path : 'Home',
+            label: getPathLabel(path),
             history: [path],
             historyIndex: 0
         };
@@ -239,10 +261,28 @@ export const useFileStore = create<FileStore>((set, get) => ({
         set({ activeTabIndex: index });
         const { tabs } = get();
         if (tabs[index]) {
-            // check if path changed?
             // Load regardless to refresh view
             set({ currentPath: tabs[index].path }); // Sync currentPath immediately
             get().loadFiles(tabs[index].path);
+        }
+
+        // When >10 tabs, trim history of inactive tabs to save memory
+        if (tabs.length > 10) {
+            const MAX_INACTIVE_HISTORY = 5;
+            const trimmed = tabs.map((tab, i) => {
+                if (i === index) return tab; // keep active tab intact
+                if (tab.history.length > MAX_INACTIVE_HISTORY) {
+                    // Keep only the last MAX_INACTIVE_HISTORY entries
+                    const trimStart = tab.history.length - MAX_INACTIVE_HISTORY;
+                    return {
+                        ...tab,
+                        history: tab.history.slice(trimStart),
+                        historyIndex: Math.max(0, tab.historyIndex - trimStart),
+                    };
+                }
+                return tab;
+            });
+            set({ tabs: trimmed });
         }
     },
 
@@ -267,7 +307,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
         newTabs[activeTabIndex] = {
             ...activeTab,
             path: path,
-            label: path ? path.split(/[/\\]/).pop() || path : 'Home',
+            label: getPathLabel(path),
             history: newHistory,
             historyIndex: newHistory.length - 1
         };
@@ -291,7 +331,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
         newTabs[activeTabIndex] = {
             ...activeTab,
             path: newPath,
-            label: newPath ? newPath.split(/[/\\]/).pop() || newPath : 'Home',
+            label: getPathLabel(newPath),
             historyIndex: newIndex
         };
 
@@ -311,7 +351,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
         newTabs[activeTabIndex] = {
             ...activeTab,
             path: newPath,
-            label: newPath ? newPath.split(/[/\\]/).pop() || newPath : 'Home',
+            label: getPathLabel(newPath),
             historyIndex: newIndex
         };
 
@@ -385,8 +425,47 @@ export const useFileStore = create<FileStore>((set, get) => ({
     },
     setCurrentView: (view) => set({ currentView: view }),
 
-    selectFile: async (file) => {
-        set({ selectedFile: file, previewInfo: null, fileTags: [] });
+    selectFile: async (file, multi = false, range = false) => {
+        const { selectedFiles, selectedFile } = get();
+
+        let newSelection: FileEntry[] = [];
+
+        if (!file) {
+            newSelection = [];
+            set({ selectedFile: null, selectedFiles: [], previewInfo: null, fileTags: [] });
+            return;
+        }
+
+        if (range && selectedFile) {
+            // Range selection (Shift+Click)
+            const sorted = get().getSortedFiles(); // Use current sorted view
+            const idx1 = sorted.findIndex(f => f.path === selectedFile.path);
+            const idx2 = sorted.findIndex(f => f.path === file.path);
+
+            if (idx1 !== -1 && idx2 !== -1) {
+                const start = Math.min(idx1, idx2);
+                const end = Math.max(idx1, idx2);
+                newSelection = sorted.slice(start, end + 1);
+            } else {
+                newSelection = [file];
+            }
+        } else if (multi) {
+            // Multi selection (Ctrl+Click)
+            const exists = selectedFiles.some(f => f.path === file.path);
+            if (exists) {
+                newSelection = selectedFiles.filter(f => f.path !== file.path);
+            } else {
+                newSelection = [...selectedFiles, file];
+            }
+        } else {
+            // Single selection
+            newSelection = [file];
+        }
+
+        set({ selectedFile: file, selectedFiles: newSelection, previewInfo: null, fileTags: [] });
+
+        // Update preview only if single file selected (or last clicked is significant)
+        // If multiple, maybe show summary? For now, show info for the last clicked one (primary)
         if (file && !file.is_directory) {
             try {
                 const info = await invoke<FileInfo>('get_file_info', { path: file.path });
@@ -395,17 +474,26 @@ export const useFileStore = create<FileStore>((set, get) => ({
             } catch (err) {
                 console.error('Failed to get file info:', err);
             }
+        } else if (newSelection.length > 1) {
+            // Maybe clear preview or show summary?
+            set({ previewInfo: null });
         }
+    },
+
+    selectAll: () => {
+        const sorted = get().getSortedFiles();
+        set({ selectedFiles: sorted, selectedFile: sorted[sorted.length - 1] || null });
+    },
+
+    clearSelection: () => {
+        set({ selectedFiles: [], selectedFile: null, previewInfo: null });
     },
 
     navigateUp: async () => {
         const current = get().currentPath;
         if (!current) return;
-
-        const parent = current.split(/[/\\]/).slice(0, -1).join('/') || '/';
-
-        if (current.endsWith(':') || current === '/') return;
-
+        const parent = getParentPath(current);
+        if (parent === null) return;
         await get().setCurrentPath(parent);
     },
 
@@ -422,12 +510,22 @@ export const useFileStore = create<FileStore>((set, get) => ({
         if (!currentPaths.includes(path)) {
             const newPaths = [...currentPaths, path];
             set({ settings: { ...get().settings, indexedPaths: newPaths } });
+            try {
+                await invoke('save_app_setting', { key: 'indexed_paths', value: JSON.stringify(newPaths) });
+            } catch (err) {
+                console.error('Failed to save indexed paths:', err);
+            }
         }
     },
 
     removeIndexedPath: async (path: string) => {
         const newPaths = get().settings.indexedPaths.filter(p => p !== path);
         set({ settings: { ...get().settings, indexedPaths: newPaths } });
+        try {
+            await invoke('save_app_setting', { key: 'indexed_paths', value: JSON.stringify(newPaths) });
+        } catch (err) {
+            console.error('Failed to save indexed paths:', err);
+        }
     },
 
     loadIndexedPaths: async () => {
@@ -479,13 +577,19 @@ export const useFileStore = create<FileStore>((set, get) => ({
         set({ isSearching: true, searchQuery: query, currentView: 'semantic-search', searchResults: [] });
         try {
             let results: HybridSearchResult[] = [];
+            const emptyFilters = {
+                file_types: [],
+                size_range: null as [number, number] | null,
+                date_range: null as [string, string] | null,
+                location: null as string | null,
+            };
             if (type === 'hybrid') {
-                results = await invoke('search_hybrid', { query, limit: 30 });
+                results = await invoke('search_hybrid', { query, limit: 30, filters: emptyFilters });
             } else if (type === 'semantic') {
                 results = await invoke('search_semantic', { query, limit: 30 });
             } else {
                 // Wrap keyword results in HybridSearchResult
-                const keywordResults = await invoke<any[]>('search_keyword', { query });
+                const keywordResults = await invoke<any[]>('search_keyword', { query, filters: emptyFilters });
                 results = keywordResults.map(r => ({
                     ...r,
                     combined_score: r.score, // specific normalization might be needed
@@ -590,5 +694,34 @@ export const useFileStore = create<FileStore>((set, get) => ({
         } catch (err) {
             console.error("Failed to delete rule:", err);
         }
+    },
+
+    // Stage 10: Preview & Power Features
+    previewPanelOpen: true, // Default open
+    quickLookOpen: false,
+    commandPaletteOpen: false,
+    shortcutsCheatSheetOpen: false,
+
+    togglePreviewPanel: () => {
+        set((state) => ({ previewPanelOpen: !state.previewPanelOpen }));
+    },
+
+    openQuickLook: () => {
+        const { selectedFile } = get();
+        if (selectedFile && !selectedFile.is_directory) {
+            set({ quickLookOpen: true });
+        }
+    },
+
+    closeQuickLook: () => {
+        set({ quickLookOpen: false });
+    },
+
+    toggleCommandPalette: () => {
+        set((state) => ({ commandPaletteOpen: !state.commandPaletteOpen }));
+    },
+
+    toggleShortcutsCheatSheet: () => {
+        set((state) => ({ shortcutsCheatSheetOpen: !state.shortcutsCheatSheetOpen }));
     }
 }));

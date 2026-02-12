@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Folder, File, ChevronRight, ChevronDown } from 'lucide-react';
 
-interface DirectoryNode {
+export interface DirectoryNode {
     name: string;
     path: string;
     children: DirectoryNode[];

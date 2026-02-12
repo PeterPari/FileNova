@@ -1,28 +1,36 @@
 import { useRef, useEffect, useState, useMemo, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useFileStore } from '../store/fileStore';
-import { File, Folder, X, Grid, List as ListIcon, ChevronUp, ChevronDown } from 'lucide-react';
+import { File, Folder, X, Grid, List as ListIcon, ChevronUp, ChevronDown, Edit2, Wand2, Pin, MoreHorizontal } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { TagManager } from './TagManager';
+import { BatchRenameModal } from './BatchRenameModal';
+import { UndoManager } from './UndoManager';
+import { FileContextMenu } from './FileContextMenu';
 
 export const FileBrowser = () => {
     const {
-        files, loadFiles, currentPath, selectFile, selectedFile, setCurrentPath,
+        files, loadFiles, currentPath, selectFile, selectedFiles, selectedFile, setCurrentPath,
         viewMode, setViewMode, sortField, sortDirection, setSort, navigateUp
     } = useFileStore();
 
     const parentRef = useRef<HTMLDivElement>(null);
     const [showTags, setShowTags] = useState(false);
     const [containerWidth, setContainerWidth] = useState(0);
+    const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
+    const [renameModalMode, setRenameModalMode] = useState<'default' | 'smart'>('default');
+    const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+    const [focusedIndex, setFocusedIndex] = useState(-1);
+    const [pinnedFiles, setPinnedFiles] = useState<string[]>([]);
 
-    // Initial load
     useEffect(() => {
         if (!currentPath) {
             loadFiles('.');
             setCurrentPath('.');
         }
+        loadPinnedFiles();
     }, [currentPath, loadFiles, setCurrentPath]);
 
-    // Measure container width for grid layout
     useEffect(() => {
         if (!parentRef.current) return;
         const resizeObserver = new ResizeObserver(entries => {
@@ -54,61 +62,93 @@ export const FileBrowser = () => {
         });
     }, [files, sortField, sortDirection]);
 
-    // Keyboard Navigation
+    useEffect(() => {
+        if (!selectedFile) {
+            setFocusedIndex(sortedFiles.length > 0 ? 0 : -1);
+            return;
+        }
+        const index = sortedFiles.findIndex((file) => file.path === selectedFile.path);
+        setFocusedIndex(index);
+    }, [selectedFile, sortedFiles]);
+
+    const GRID_ITEM_WIDTH = 120;
+    const GRID_GAP = 16;
+    const columns = Math.max(1, Math.floor((containerWidth - 32) / (GRID_ITEM_WIDTH + GRID_GAP)));
+
+    const rowVirtualizer = useVirtualizer({
+        count: viewMode === 'list' ? sortedFiles.length : Math.ceil(sortedFiles.length / columns),
+        getScrollElement: () => parentRef.current,
+        estimateSize: () => viewMode === 'list' ? 44 : 180,
+        overscan: 5,
+    });
+
+    const getFileTypeLabel = (file: any) => {
+        if (file.is_directory) return 'Folder';
+        const ext = file.name.split('.').pop() || '';
+        return ext ? ext.toUpperCase() : 'File';
+    };
+
+    const scrollToFileIndex = (index: number) => {
+        if (index < 0) return;
+        const rowIndex = viewMode === 'list' ? index : Math.floor(index / columns);
+        rowVirtualizer.scrollToIndex(rowIndex, { align: 'auto' });
+    };
+
+    const isTypingTarget = (target: EventTarget | null) => {
+        if (!(target instanceof HTMLElement)) return false;
+        if (target.isContentEditable) return true;
+        const tag = target.tagName.toLowerCase();
+        return tag === 'input' || tag === 'textarea' || tag === 'select';
+    };
+
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (files.length === 0) return;
+            if (isTypingTarget(e.target)) return;
 
-            // Only handle if not focused on input
-            if (document.activeElement?.tagName === 'INPUT') return;
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+                e.preventDefault();
+                useFileStore.getState().selectAll();
+                return;
+            }
 
-            const currentIndex = selectedFile ? sortedFiles.findIndex(f => f.path === selectedFile.path) : -1;
+            if (sortedFiles.length === 0) return;
+            const currentIndex = focusedIndex >= 0 ? focusedIndex : 0;
+            let nextIndex = currentIndex;
 
-            if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                const nextIndex = currentIndex < sortedFiles.length - 1 ? currentIndex + 1 : 0;
-                handleSelect(sortedFiles[nextIndex]);
-                // Scroll into view logic would be good here
-            } else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                const prevIndex = currentIndex > 0 ? currentIndex - 1 : sortedFiles.length - 1;
-                handleSelect(sortedFiles[prevIndex]);
-            } else if (e.key === 'Enter') {
-                e.preventDefault();
-                if (selectedFile) {
-                    handleDoubleClick(selectedFile);
-                }
-            } else if (e.key === 'Backspace') {
-                e.preventDefault();
-                navigateUp();
-            } else if (viewMode === 'grid') {
-                if (e.key === 'ArrowRight') {
+            switch (e.key) {
+                case 'ArrowDown':
                     e.preventDefault();
-                    const nextIndex = currentIndex < sortedFiles.length - 1 ? currentIndex + 1 : 0;
-                    handleSelect(sortedFiles[nextIndex]);
-                } else if (e.key === 'ArrowLeft') {
+                    nextIndex = viewMode === 'grid' ? Math.min(currentIndex + columns, sortedFiles.length - 1) : Math.min(currentIndex + 1, sortedFiles.length - 1);
+                    break;
+                case 'ArrowUp':
                     e.preventDefault();
-                    const prevIndex = currentIndex > 0 ? currentIndex - 1 : sortedFiles.length - 1;
-                    handleSelect(sortedFiles[prevIndex]);
-                }
+                    nextIndex = viewMode === 'grid' ? Math.max(currentIndex - columns, 0) : Math.max(currentIndex - 1, 0);
+                    break;
+                case 'ArrowRight':
+                    if (viewMode === 'grid') { e.preventDefault(); nextIndex = Math.min(currentIndex + 1, sortedFiles.length - 1); }
+                    break;
+                case 'ArrowLeft':
+                    if (viewMode === 'grid') { e.preventDefault(); nextIndex = Math.max(currentIndex - 1, 0); }
+                    break;
+                case 'Enter':
+                    if (selectedFile?.is_directory) { e.preventDefault(); setCurrentPath(selectedFile.path); }
+                    return;
+                case 'Backspace':
+                    e.preventDefault(); navigateUp(); return;
+                default: return;
+            }
+
+            if (nextIndex !== currentIndex) {
+                const nextFile = sortedFiles[nextIndex];
+                setFocusedIndex(nextIndex);
+                selectFile(nextFile, false, false);
+                scrollToFileIndex(nextIndex);
             }
         };
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [selectedFile, sortedFiles, navigateUp, viewMode]);
-
-    // Grid Layout Constants
-    const GRID_ITEM_WIDTH = 120;
-    const GRID_GAP = 16;
-    const columns = Math.max(1, Math.floor((containerWidth - 32) / (GRID_ITEM_WIDTH + GRID_GAP))); // -32 for padding
-
-    const rowVirtualizer = useVirtualizer({
-        count: viewMode === 'list' ? sortedFiles.length : Math.ceil(sortedFiles.length / columns),
-        getScrollElement: () => parentRef.current,
-        estimateSize: () => viewMode === 'list' ? 40 : 160, // List row height vs Grid row height
-        overscan: 5,
-    });
+    }, [columns, focusedIndex, navigateUp, selectFile, selectedFile, setCurrentPath, sortedFiles, viewMode]);
 
     const handleDoubleClick = (file: any) => {
         if (file.is_directory) {
@@ -116,21 +156,42 @@ export const FileBrowser = () => {
         }
     };
 
-    const handleSelect = useCallback((file: any) => {
-        selectFile(file);
-        if (!file.is_directory) {
+    const handleSelect = useCallback((file: any, e: React.MouseEvent) => {
+        // Standard Desktop Behavior: Single click selects. Double click navigates (handled separately).
+        selectFile(file, e.ctrlKey || e.metaKey, e.shiftKey);
+
+        if (!file.is_directory && !e.ctrlKey && !e.shiftKey) {
             setShowTags(true);
-        } else {
+        } else if (e.ctrlKey || e.shiftKey) {
             setShowTags(false);
         }
     }, [selectFile]);
+
+    const handleContextMenu = useCallback((e: React.MouseEvent, file: any) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const isSelected = selectedFiles.some(f => f.path === file.path);
+        if (!isSelected) {
+            selectFile(file, false, false);
+        }
+        setContextMenu({ x: e.clientX, y: e.clientY });
+    }, [selectFile, selectedFiles]);
 
     const formatSize = (bytes: number) => {
         if (bytes === 0) return '0 B';
         const k = 1024;
         const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    };
+
+    const loadPinnedFiles = async () => {
+        try { const result = await invoke<string[]>('get_pinned_files'); setPinnedFiles(result); } catch (e) { }
+    };
+
+    const handleTogglePin = async () => {
+        if (!selectedFile) return;
+        try { await invoke('toggle_pin_file', { path: selectedFile.path }); await loadPinnedFiles(); } catch (e) { }
     };
 
     const SortIcon = ({ field }: { field: any }) => {
@@ -140,7 +201,7 @@ export const FileBrowser = () => {
 
     const SortHeader = ({ label, field, className }: { label: string, field: any, className?: string }) => (
         <div
-            className={`flex items-center gap-1 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 p-1 rounded ${className}`}
+            className={`flex items-center gap-1 cursor-pointer hover:bg-surface-hover hover:text-primary p-2 rounded transition-colors ${className}`}
             onClick={() => setSort(field)}
         >
             {label}
@@ -149,137 +210,165 @@ export const FileBrowser = () => {
     );
 
     return (
-        <div className="flex h-full flex-col">
+        <div className="flex h-full flex-col bg-base text-primary">
             {/* Toolbar */}
-            <div className="h-10 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 bg-white dark:bg-gray-900 shrink-0">
-                <div className="text-sm text-gray-500">
-                    {files.length} items
+            <div className="h-12 border-b border-base flex items-center justify-between px-4 bg-surface shrink-0">
+                <div className="text-sm text-secondary flex items-center gap-4">
+                    <span className="font-medium">{files.length} items</span>
+                    {selectedFiles.length > 0 && (
+                        <span className="text-accent-primary bg-surface-active px-2 py-0.5 rounded text-xs font-semibold">
+                            {selectedFiles.length} selected
+                        </span>
+                    )}
                 </div>
-                <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5">
-                    <button
-                        onClick={() => setViewMode('grid')}
-                        className={`p-1.5 rounded-md transition-colors ${viewMode === 'grid' ? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
-                    >
-                        <Grid size={16} />
-                    </button>
-                    <button
-                        onClick={() => setViewMode('list')}
-                        className={`p-1.5 rounded-md transition-colors ${viewMode === 'list' ? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
-                    >
-                        <ListIcon size={16} />
-                    </button>
+                <div className="flex items-center gap-3">
+                     {selectedFiles.length > 0 && (
+                        <div className="flex items-center bg-surface border border-base rounded-lg overflow-hidden h-8">
+                            <button
+                                onClick={() => { setRenameModalMode('default'); setIsRenameModalOpen(true); }}
+                                className="flex items-center gap-1.5 px-3 h-full text-secondary hover:text-primary hover:bg-surface-hover text-sm transition-colors border-r border-base"
+                            >
+                                <Edit2 size={14} />
+                                Rename
+                            </button>
+                            <button
+                                onClick={() => { setRenameModalMode('smart'); setIsRenameModalOpen(true); }}
+                                className="flex items-center gap-1.5 px-3 h-full text-indigo-500 hover:text-indigo-600 hover:bg-surface-hover text-sm transition-colors"
+                                title="AI Smart Rename"
+                            >
+                                <Wand2 size={14} />
+                                Smart
+                            </button>
+                        </div>
+                    )}
+                    <div className="h-4 w-px bg-border-base mx-1"></div>
+                    <UndoManager />
+                     <div className="flex items-center bg-surface border border-base rounded-lg p-0.5 ml-2">
+                        <button
+                            onClick={() => setViewMode('grid')}
+                            className={`p-1.5 rounded-md transition-all ${viewMode === 'grid' ? 'bg-surface-active text-accent-primary shadow-sm' : 'text-secondary hover:text-primary hover:bg-surface-hover'}`}
+                            title="Grid View"
+                        >
+                            <Grid size={16} />
+                        </button>
+                        <button
+                            onClick={() => setViewMode('list')}
+                            className={`p-1.5 rounded-md transition-all ${viewMode === 'list' ? 'bg-surface-active text-accent-primary shadow-sm' : 'text-secondary hover:text-primary hover:bg-surface-hover'}`}
+                            title="List View"
+                        >
+                            <ListIcon size={16} />
+                        </button>
+                    </div>
                 </div>
             </div>
 
             {/* List Header */}
             {viewMode === 'list' && (
-                <div className="flex items-center px-4 h-8 bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700 text-xs font-semibold text-gray-500 shrink-0">
-                    <div className="mr-3 w-5"></div>
+                <div className="flex items-center px-4 h-10 bg-surface border-b border-base text-xs font-semibold text-secondary shrink-0 uppercase tracking-wide">
+                     <div className="w-8 shrink-0"></div> {/* Icon space */}
                     <SortHeader label="Name" field="name" className="flex-1" />
-                    <div className="w-40 mr-4 hidden md:block">Tags</div>
-                    <div className="w-48 flex items-center gap-8">
+                    <div className="w-40 mr-4 hidden md:block pl-2">Tags</div>
+                    <SortHeader label="Type" field="type" className="w-24 hidden lg:flex" />
+                    <div className="w-60 flex items-center justify-end gap-4">
                         <SortHeader label="Size" field="size" className="w-20 justify-end" />
-                        <SortHeader label="Date Modified" field="date" className="w-32 justify-end" />
+                        <SortHeader label="Modified" field="date" className="w-36 justify-end" />
                     </div>
                 </div>
             )}
 
             <div className="flex-1 overflow-hidden flex">
-                <div
-                    ref={parentRef}
-                    className="flex-1 overflow-auto bg-white dark:bg-gray-900 custom-scrollbar"
-                >
-                    <div
-                        style={{
-                            height: `${rowVirtualizer.getTotalSize()}px`,
-                            width: '100%',
-                            position: 'relative',
-                        }}
-                    >
+                <div ref={parentRef} className="flex-1 overflow-auto custom-scrollbar bg-base" onClick={() => selectFile(null, false, false)}>
+                    <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, width: '100%', position: 'relative' }}>
                         {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                            // List View
                             if (viewMode === 'list') {
                                 const file = sortedFiles[virtualRow.index];
-                                const isSelected = selectedFile?.path === file.path;
+                                const isSelected = selectedFiles.some(f => f.path === file.path);
                                 return (
                                     <div
                                         key={virtualRow.key}
-                                        onClick={() => handleSelect(file)}
-                                        onDoubleClick={() => handleDoubleClick(file)}
-                                        className={`absolute top-0 left-0 w-full h-[40px] flex items-center px-4 cursor-pointer border-b border-gray-100 dark:border-gray-800 transition-colors
-                                            ${isSelected ? 'bg-blue-100 dark:bg-blue-900/30' : 'hover:bg-gray-50 dark:hover:bg-gray-800'}
+                                        onClick={(e) => { e.stopPropagation(); handleSelect(file, e); }}
+                                        onDoubleClick={(e) => { e.stopPropagation(); handleDoubleClick(file); }}
+                                        onContextMenu={(e) => handleContextMenu(e, file)}
+                                        className={`absolute top-0 left-0 w-full h-[44px] flex items-center px-4 cursor-pointer border-b border-base/50 transition-colors select-none group
+                                            ${isSelected ? 'bg-surface-active' : 'hover:bg-surface-hover'}
                                         `}
                                         style={{ transform: `translateY(${virtualRow.start}px)` }}
                                     >
-                                        <span className="mr-3 text-gray-400">
-                                            {file.is_directory ? <Folder className="text-yellow-500 fill-yellow-500" size={20} /> : <File className="text-gray-400" size={20} />}
-                                        </span>
-                                        <span className="flex-1 truncate font-medium text-sm text-gray-700 dark:text-gray-200 flex items-center gap-2">
+                                        <div className="w-8 shrink-0 flex items-center justify-center text-secondary group-hover:text-primary">
+                                            {file.is_directory ? <Folder className="text-yellow-400 fill-yellow-400" size={20} /> : <File size={20} />}
+                                        </div>
+                                        <span className={`flex-1 truncate text-sm font-medium flex items-center gap-2 ${isSelected ? 'text-primary' : 'text-secondary group-hover:text-primary'}`}>
+                                            {pinnedFiles.includes(file.path) && <Pin size={12} className="text-accent-primary shrink-0" />}
                                             {file.name}
                                         </span>
 
-                                        {/* Tags Column */}
                                         <div className="w-40 mr-4 hidden md:flex items-center gap-1 overflow-hidden">
                                             {file.tags?.slice(0, 2).map((tag: any) => (
-                                                <span key={tag.id} className="text-[10px] bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-700 dark:text-gray-300 truncate max-w-[80px]" title={tag.tag}>
+                                                <button
+                                                    key={tag.id}
+                                                    className="text-[10px] bg-surface-hover px-1.5 py-0.5 rounded text-secondary hover:text-primary truncate max-w-[80px]"
+                                                    onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('tag-search', { detail: { tag: tag.tag } })); }}
+                                                >
                                                     {tag.tag}
-                                                </span>
+                                                </button>
                                             ))}
-                                            {file.tags && file.tags.length > 2 && <span className="text-[10px] text-gray-400">+{file.tags.length - 2}</span>}
+                                            {file.tags && file.tags.length > 2 && <span className="text-[10px] text-muted">+{file.tags.length - 2}</span>}
                                         </div>
 
-                                        <div className="w-48 flex items-center gap-8 text-xs text-gray-500">
+                                        <div className="w-24 hidden lg:block text-xs text-muted truncate">
+                                            {getFileTypeLabel(file)}
+                                        </div>
+
+                                        <div className="w-60 flex items-center justify-end gap-4 text-xs text-muted">
                                             <span className="w-20 text-right">{!file.is_directory && formatSize(file.size)}</span>
-                                            <span className="w-32 text-right truncate">{new Date(file.modified_at * 1000).toLocaleString()}</span>
+                                            <span className="w-36 text-right truncate font-mono">{new Date(file.modified_at * 1000).toLocaleString()}</span>
                                         </div>
                                     </div>
                                 );
-                            }
-
-                            // Grid View
-                            else {
+                            } else {
                                 const startIndex = virtualRow.index * columns;
                                 const rowFiles = sortedFiles.slice(startIndex, startIndex + columns);
-
                                 return (
                                     <div
                                         key={virtualRow.key}
                                         className="absolute top-0 left-0 w-full flex gap-4 px-4"
-                                        style={{ transform: `translateY(${virtualRow.start}px)`, height: '160px' }} // Increased height for tags
+                                        style={{ transform: `translateY(${virtualRow.start}px)`, height: '180px' }}
                                     >
                                         {rowFiles.map((file) => {
-                                            const isSelected = selectedFile?.path === file.path;
+                                            const isSelected = selectedFiles.some(f => f.path === file.path);
                                             return (
                                                 <div
                                                     key={file.path}
-                                                    onClick={() => handleSelect(file)}
-                                                    onDoubleClick={() => handleDoubleClick(file)}
-                                                    className={`flex flex-col items-center justify-center p-2 rounded-lg cursor-pointer transition-colors border border-transparent
-                                                        ${isSelected ? 'bg-blue-100 dark:bg-blue-900/30 border-blue-200 dark:border-blue-800' : 'hover:bg-gray-50 dark:hover:bg-gray-800 hover:border-gray-200 dark:hover:border-gray-700'}
+                                                    onClick={(e) => { e.stopPropagation(); handleSelect(file, e); }}
+                                                    onDoubleClick={(e) => { e.stopPropagation(); handleDoubleClick(file); }}
+                                                    onContextMenu={(e) => handleContextMenu(e, file)}
+                                                    className={`
+                                                        flex flex-col items-center p-3 rounded-xl cursor-pointer transition-all duration-200 border select-none relative group
+                                                        ${isSelected 
+                                                            ? 'bg-surface-active border-accent-primary/50 shadow-sm' 
+                                                            : 'bg-surface border-transparent hover:bg-surface-hover hover:shadow-md hover:border-border-highlight'}
                                                     `}
                                                     style={{ width: `${GRID_ITEM_WIDTH}px`, height: '100%' }}
                                                 >
-                                                    <div className="mb-2 relative">
-                                                        {file.is_directory ?
-                                                            <Folder className="text-yellow-500 fill-yellow-500" size={48} /> :
-                                                            <File className="text-gray-400" size={48} />
-                                                        }
+                                                    <div className="mb-3 relative mt-2 transform transition-transform group-hover:scale-105 duration-200">
+                                                        {file.is_directory ? <Folder className="text-yellow-400 fill-yellow-400 drop-shadow-sm" size={56} /> : <File className="text-secondary" size={56} />}
+                                                        {pinnedFiles.includes(file.path) && <Pin size={16} className="absolute -top-1 -right-2 text-accent-primary fill-current" />}
                                                     </div>
-                                                    <span className="text-center text-xs font-medium text-gray-700 dark:text-gray-200 line-clamp-1 w-full break-words px-1" title={file.name}>
+                                                    
+                                                    <span className={`text-center text-xs font-medium line-clamp-2 w-full break-words px-1 leading-tight ${isSelected ? 'text-primary' : 'text-secondary group-hover:text-primary'}`} title={file.name}>
                                                         {file.name}
                                                     </span>
 
-                                                    {/* Grid Tags */}
-                                                    <div className="flex flex-wrap justify-center gap-1 mt-1 px-1 h-5 overflow-hidden w-full">
+                                                    <div className="flex flex-wrap justify-center gap-1 mt-auto px-1 h-5 overflow-hidden w-full opacity-0 group-hover:opacity-100 transition-opacity">
                                                         {file.tags?.slice(0, 2).map((tag: any) => (
-                                                            <span key={tag.id} className="text-[9px] bg-blue-100 dark:bg-blue-900/50 text-blue-800 dark:text-blue-200 px-1 rounded truncate max-w-full">
+                                                            <span key={tag.id} className="text-[9px] bg-accent-primary/10 text-accent-primary px-1 rounded truncate max-w-full">
                                                                 {tag.tag}
                                                             </span>
                                                         ))}
                                                     </div>
-
-                                                    {!file.is_directory && (
-                                                        <span className="text-[10px] text-gray-400 mt-1">{formatSize(file.size)}</span>
+                                                    
+                                                     {!file.is_directory && (
+                                                        <span className="text-[10px] text-muted mt-1">{formatSize(file.size)}</span>
                                                     )}
                                                 </div>
                                             );
@@ -291,38 +380,49 @@ export const FileBrowser = () => {
                     </div>
                 </div>
 
-                {/* Right Panel for Details/Tags - Only visible if not directory and tags enabled */}
-                {selectedFile && !selectedFile.is_directory && showTags && (
-                    <div className="w-80 bg-gray-50 dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 overflow-y-auto shrink-0 transition-all">
-                        <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
-                            <h3 className="font-semibold text-gray-700 dark:text-gray-200 truncate pr-2" title={selectedFile.name}>
+                {selectedFile && !selectedFile.is_directory && showTags && selectedFiles.length === 1 && (
+                    <div className="w-80 bg-surface border-l border-base overflow-y-auto shrink-0 transition-all shadow-xl z-20">
+                        <div className="p-4 border-b border-base flex justify-between items-center bg-surface sticky top-0">
+                            <h3 className="font-semibold text-primary truncate pr-2" title={selectedFile.name}>
                                 {selectedFile.name}
                             </h3>
-                            <button onClick={() => setShowTags(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+                            <button onClick={() => setShowTags(false)} className="text-muted hover:text-primary p-1 rounded hover:bg-surface-hover">
                                 <X size={18} />
                             </button>
                         </div>
                         <div className="p-4">
-                            <div className="flex items-center gap-4 mb-4">
-                                <div className="p-3 bg-blue-100 dark:bg-blue-900 rounded-lg">
-                                    <File className="text-blue-600 dark:text-blue-400" size={32} />
+                            <div className="flex items-center gap-4 mb-6">
+                                <div className="p-4 bg-surface-hover rounded-xl">
+                                    <File className="text-accent-primary" size={40} />
                                 </div>
                                 <div>
-                                    <p className="text-xs text-gray-500">Size</p>
-                                    <p className="font-medium text-gray-700 dark:text-gray-200">{formatSize(selectedFile.size)}</p>
+                                    <p className="text-xs text-muted uppercase tracking-wider font-semibold">Size</p>
+                                    <p className="font-medium text-primary text-lg">{formatSize(selectedFile.size)}</p>
                                 </div>
                             </div>
-
-                            <div className="mt-6">
-                                <TagManager
-                                    filePath={selectedFile.path}
-                                    onClose={() => { }}
-                                />
+                            <div className="mt-2">
+                                <TagManager filePath={selectedFile.path} onClose={() => { }} />
                             </div>
                         </div>
                     </div>
                 )}
             </div>
+
+            <BatchRenameModal isOpen={isRenameModalOpen} onClose={() => setIsRenameModalOpen(false)} initialMode={renameModalMode} />
+            {contextMenu && (
+                <FileContextMenu
+                    x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}
+                    onRename={() => { setRenameModalMode('default'); setIsRenameModalOpen(true); }}
+                    onSmartRename={() => { setRenameModalMode('smart'); setIsRenameModalOpen(true); }}
+                    onDelete={async () => {
+                        if (confirm(`Move ${selectedFiles.length} item(s) to trash?`)) {
+                            for (const f of selectedFiles) { try { await invoke('move_file_to_trash', { path: f.path }); } catch (e) { console.error(e); } }
+                        }
+                    }}
+                    onOpen={() => { if (selectedFile?.is_directory) setCurrentPath(selectedFile.path); }}
+                    onTogglePin={handleTogglePin} isPinned={selectedFile ? pinnedFiles.includes(selectedFile.path) : false} fileCount={selectedFiles.length}
+                />
+            )}
         </div>
     );
 };

@@ -21,9 +21,21 @@ export const IndexingStatus = () => {
         );
     }
 
-    const percentage = indexingStatus.total_files > 0
-        ? Math.round((indexingStatus.processed_files / indexingStatus.total_files) * 100)
-        : 0;
+    const percentage = indexingStatus.percentage_complete > 0
+        ? Math.round(indexingStatus.percentage_complete)
+        : (indexingStatus.total_files > 0
+            ? Math.round((indexingStatus.processed_files / indexingStatus.total_files) * 100)
+            : 0);
+
+    const formatEta = (seconds: number) => {
+        if (!seconds) return 'Calculating...';
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        if (mins > 0) {
+            return `${mins}m ${secs}s`;
+        }
+        return `${secs}s`;
+    };
 
     return (
         <div className="fixed bottom-4 right-4 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-4 rounded-xl shadow-lg w-80 z-50 animate-in slide-in-from-bottom-5 fade-in duration-300">
@@ -47,6 +59,10 @@ export const IndexingStatus = () => {
             <div className="flex justify-between items-center text-xs text-gray-400">
                 <span className="truncate max-w-[150px]" title={indexingStatus.current_path}>{indexingStatus.current_path || 'Preparing...'}</span>
                 <span>{indexingStatus.processed_files} / {indexingStatus.total_files}</span>
+            </div>
+            <div className="mt-2 text-[11px] text-gray-400 flex justify-between">
+                <span>ETA</span>
+                <span>{formatEta(indexingStatus.estimated_time_remaining_secs)}</span>
             </div>
         </div>
     );
