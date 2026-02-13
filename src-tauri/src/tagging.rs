@@ -189,8 +189,13 @@ pub async fn generate_tags(app: &AppHandle, file_id: i64) -> Result<Vec<String>,
         .map_err(|e| e.to_string())?
         .unwrap_or("http://localhost:11434".to_string());
         
-    let openai_key = db::get_setting(&conn, "openai_api_key")
-        .map_err(|e| e.to_string())?
+    let openai_key = crate::db::get_secret("openai_api_key")
+        .unwrap_or(None)
+        .or_else(|| {
+            db::get_setting(&conn, "openai_api_key")
+                .ok()
+                .flatten()
+        })
         .unwrap_or_default();
 
     let (filename, extension, extracted_text): (String, Option<String>, Option<String>) = conn.query_row(

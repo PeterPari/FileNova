@@ -18,17 +18,37 @@ export type ConditionType =
     | 'ModifiedBefore' | 'ModifiedAfter'
     | 'PathContains' | 'HasTag';
 
+export type ConditionScalar = string | number | boolean | null;
+
+export type ConditionValue = Condition[] | Condition | ConditionScalar;
+
 export interface Condition {
     type: ConditionType;
-    value?: any; // Vec<Condition> for And/Or, Condition for Not, primitive for others
+    value?: ConditionValue;
 }
 
 export type ActionType =
     | 'Move' | 'Copy' | 'Rename' | 'Archive' | 'Delete' | 'Trash' | 'AddTag';
 
+export interface ActionValue {
+    destination?: string;
+    pattern?: string;
+    tag?: string;
+}
+
 export interface Action {
     type: ActionType;
-    value?: any; // { destination: string } etc
+    value?: ActionValue;
+}
+
+export interface RuleRunResult {
+    files_matched: number;
+    files_processed: number;
+    errors: string[];
+    requires_resolution?: boolean;
+    batch_id?: string;
+    conflicts?: unknown[];
+    planned_actions?: unknown[];
 }
 
 interface RuleStore {
@@ -39,7 +59,7 @@ interface RuleStore {
     fetchRules: () => Promise<void>;
     saveRule: (rule: Omit<Rule, 'id'> & { id?: number }) => Promise<void>;
     deleteRule: (id: number) => Promise<void>;
-    runRule: (id: number, dryRun: boolean) => Promise<any>;
+    runRule: (id: number, dryRun: boolean) => Promise<RuleRunResult>;
 }
 
 export const useRuleStore = create<RuleStore>((set, get) => ({
@@ -52,8 +72,9 @@ export const useRuleStore = create<RuleStore>((set, get) => ({
         try {
             const rules = await invoke<Rule[]>('get_rules');
             set({ rules, isLoading: false });
-        } catch (e: any) {
-            set({ error: e.toString(), isLoading: false });
+        } catch (e) {
+            const message = e instanceof Error ? e.message : String(e);
+            set({ error: message, isLoading: false });
         }
     },
 
@@ -64,8 +85,9 @@ export const useRuleStore = create<RuleStore>((set, get) => ({
             const ruleToSave = { ...rule, id: rule.id || 0 };
             await invoke('save_rule', { rule: ruleToSave });
             await get().fetchRules();
-        } catch (e: any) {
-            set({ error: e.toString(), isLoading: false });
+        } catch (e) {
+            const message = e instanceof Error ? e.message : String(e);
+            set({ error: message, isLoading: false });
         }
     },
 
@@ -74,19 +96,21 @@ export const useRuleStore = create<RuleStore>((set, get) => ({
         try {
             await invoke('delete_rule', { ruleId: id });
             await get().fetchRules();
-        } catch (e: any) {
-            set({ error: e.toString(), isLoading: false });
+        } catch (e) {
+            const message = e instanceof Error ? e.message : String(e);
+            set({ error: message, isLoading: false });
         }
     },
 
     runRule: async (id, dryRun) => {
         set({ isLoading: true });
         try {
-            const result = await invoke('run_rule', { ruleId: id, dryRun });
+            const result = await invoke<RuleRunResult>('run_rule', { ruleId: id, dryRun });
             set({ isLoading: false });
             return result;
-        } catch (e: any) {
-            set({ isLoading: false, error: e.toString() });
+        } catch (e) {
+            const message = e instanceof Error ? e.message : String(e);
+            set({ isLoading: false, error: message });
             throw e;
         }
     }

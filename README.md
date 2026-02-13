@@ -55,3 +55,23 @@ FileNova is a powerful, AI-driven file organization and search tool built with T
    npm run tauri dev
    ```
    This will start the frontend dev server and compile the Rust backend.
+
+## 🖥️ Run Like a Normal App (No Rebuild Every Launch)
+
+If you want FileNova to launch like a regular desktop app:
+
+1. **Build once**
+   ```bash
+   npm run app:package
+   ```
+
+2. **Launch anytime (no rebuild)**
+   ```bash
+   npm run app:run
+   ```
+
+Notes:
+- `app:dev` is still for development and hot reload.
+- `app:package` builds a local release `.exe` (no installer/signing required).
+- `app:run` starts the previously built `.exe` from your Cargo release output directory.
+- Re-run `app:package` only when you want to include new code changes in the desktop app.

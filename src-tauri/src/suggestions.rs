@@ -197,9 +197,7 @@ impl SuggestionEngine {
     }
 
     fn check_downloads_declutter(&self) -> Option<Suggestion> {
-        let app_dir = self.app_handle.path().app_data_dir().unwrap();
-        let db_path = app_dir.join("filenova.db");
-        let conn = db::init_db(&db_path).ok()?;
+        let conn = db::get_conn(&self.app_handle).ok()?;
         
         // Find files in "Downloads" folder created > 30 days ago
         let mut stmt = conn.prepare_cached(
@@ -250,9 +248,7 @@ impl SuggestionEngine {
     }
 
     fn check_temp_declutter(&self) -> Option<Suggestion> {
-        let app_dir = self.app_handle.path().app_data_dir().unwrap();
-        let db_path = app_dir.join("filenova.db");
-        let conn = db::init_db(&db_path).ok()?;
+        let conn = db::get_conn(&self.app_handle).ok()?;
 
         let mut stmt = conn
             .prepare_cached(
@@ -310,9 +306,7 @@ impl SuggestionEngine {
     }
 
     fn check_flat_folder_declutter(&self) -> Option<Suggestion> {
-        let app_dir = self.app_handle.path().app_data_dir().unwrap();
-        let db_path = app_dir.join("filenova.db");
-        let conn = db::init_db(&db_path).ok()?;
+        let conn = db::get_conn(&self.app_handle).ok()?;
 
         let mut stmt = conn
             .prepare_cached(
@@ -403,9 +397,7 @@ impl SuggestionEngine {
     }
 
     fn check_consolidation_scattered_types(&self) -> Option<Suggestion> {
-        let app_dir = self.app_handle.path().app_data_dir().unwrap();
-        let db_path = app_dir.join("filenova.db");
-        let conn = db::init_db(&db_path).ok()?;
+        let conn = db::get_conn(&self.app_handle).ok()?;
 
         let mut stmt = conn
             .prepare_cached(
@@ -484,9 +476,7 @@ impl SuggestionEngine {
     }
 
     fn check_similar_named_files(&self) -> Option<Suggestion> {
-        let app_dir = self.app_handle.path().app_data_dir().unwrap();
-        let db_path = app_dir.join("filenova.db");
-        let conn = db::init_db(&db_path).ok()?;
+        let conn = db::get_conn(&self.app_handle).ok()?;
 
         let mut stmt = conn
             .prepare_cached(
@@ -563,9 +553,7 @@ impl SuggestionEngine {
     }
 
     fn check_tag_consolidation(&self) -> Option<Suggestion> {
-        let app_dir = self.app_handle.path().app_data_dir().unwrap();
-        let db_path = app_dir.join("filenova.db");
-        let conn = db::init_db(&db_path).ok()?;
+        let conn = db::get_conn(&self.app_handle).ok()?;
 
         let mut stmt = conn
             .prepare_cached(
@@ -646,9 +634,7 @@ impl SuggestionEngine {
     }
 
     fn check_archive_suggestions(&self) -> Option<Suggestion> {
-        let app_dir = self.app_handle.path().app_data_dir().unwrap();
-        let db_path = app_dir.join("filenova.db");
-        let conn = db::init_db(&db_path).ok()?;
+        let conn = db::get_conn(&self.app_handle).ok()?;
         
         // Find folders not accessed in 6 months (simulated by Modified date for now as Access time is tricky on some OS)
         // Group by parent_path to find "dead projects"
@@ -713,9 +699,7 @@ impl SuggestionEngine {
     }
 
     fn check_sorting_opportunities(&self) -> Option<Suggestion> {
-        let app_dir = self.app_handle.path().app_data_dir().unwrap();
-        let db_path = app_dir.join("filenova.db");
-        let conn = db::init_db(&db_path).ok()?;
+        let conn = db::get_conn(&self.app_handle).ok()?;
 
         // Find "Flat" folders with many files (> 50)
         let mut stmt = conn
@@ -779,9 +763,7 @@ impl SuggestionEngine {
         // Or spaces vs underscores.
         
         // Let's implement a specific heuristic: "Spaces vs Underscores inconsistency"
-        let app_dir = self.app_handle.path().app_data_dir().unwrap();
-        let db_path = app_dir.join("filenova.db");
-        let conn = db::init_db(&db_path).ok()?;
+        let conn = db::get_conn(&self.app_handle).ok()?;
         
         let mut stmt = conn
             .prepare_cached(
@@ -847,9 +829,7 @@ impl SuggestionEngine {
     }
 
     fn check_desktop_declutter(&self) -> Option<Suggestion> {
-        let app_dir = self.app_handle.path().app_data_dir().unwrap();
-        let db_path = app_dir.join("filenova.db");
-        let conn = db::init_db(&db_path).ok()?;
+        let conn = db::get_conn(&self.app_handle).ok()?;
         
         let mut stmt = conn.prepare_cached(
             "SELECT path, name FROM files 
@@ -899,9 +879,7 @@ impl SuggestionEngine {
     }
 
     fn check_large_old_folders(&self) -> Option<Suggestion> {
-        let app_dir = self.app_handle.path().app_data_dir().unwrap();
-        let db_path = app_dir.join("filenova.db");
-        let conn = db::init_db(&db_path).ok()?;
+        let conn = db::get_conn(&self.app_handle).ok()?;
         
         // Find folders > 1GB (relaxed from 10GB for testing) with old content
             let mut stmt = conn
@@ -1163,7 +1141,10 @@ impl SuggestionEngine {
     }
 
     fn fetch_structure_summary(&self) -> String {
-        let app_dir = self.app_handle.path().app_data_dir().unwrap();
+        let app_dir = match self.app_handle.path().app_data_dir() {
+            Ok(d) => d,
+            Err(_) => return "Unknown".to_string(),
+        };
         let db_path = app_dir.join("filenova.db");
         let conn = match db::init_db(&db_path) {
             Ok(c) => c,
@@ -1377,9 +1358,7 @@ pub async fn generate_suggestions(app: AppHandle) -> Result<Vec<Suggestion>, Str
     // Phase 1: Heuristics & Data Collection (Sync/Blocking)
     // We use a block to enforce dropping of connection before async calls
     let (mut suggestions, ai_targets, config) = {
-        let app_dir = app.path().app_data_dir().unwrap();
-        let db_path = app_dir.join("filenova.db");
-        let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
+        let conn = db::get_conn(&app)?;
 
         let heuristics = engine.run_heuristics().unwrap_or_default(); // Modified run_heuristics to not need &self if possible, or new engine?
         // engine.run_heuristics creates its own connection internally currently.
@@ -1475,9 +1454,7 @@ pub async fn generate_suggestions(app: AppHandle) -> Result<Vec<Suggestion>, Str
 
 #[tauri::command]
 pub fn get_pending_suggestions(app: AppHandle) -> Result<Vec<Suggestion>, String> {
-    let app_dir = app.path().app_data_dir().unwrap();
-    let db_path = app_dir.join("filenova.db");
-    let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
+    let conn = db::get_conn(&app)?;
 
     let mut stmt = conn
         .prepare_cached(
@@ -1549,9 +1526,7 @@ pub fn get_pending_suggestions(app: AppHandle) -> Result<Vec<Suggestion>, String
 
 #[tauri::command]
 pub async fn accept_suggestion(app: AppHandle, id: i64) -> Result<String, String> {
-     let app_dir = app.path().app_data_dir().unwrap();
-    let db_path = app_dir.join("filenova.db");
-    let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
+    let conn = db::get_conn(&app)?;
 
     // 1. Fetch plan
     let mut stmt = conn.prepare_cached("SELECT plan_json FROM suggestions WHERE id = ?1").map_err(|e| e.to_string())?;
@@ -1605,10 +1580,7 @@ pub fn start_background_scanner(app: AppHandle) {
             
             // Phase 1: Heuristics & Data Collection (Sync)
             let (heuristics, ai_targets, config) = {
-                let app_dir = app.path().app_data_dir().unwrap();
-                let db_path = app_dir.join("filenova.db");
-                
-                if let Ok(conn) = db::init_db(&db_path) {
+                if let Ok(conn) = db::get_conn(&app) {
                     let h = engine.run_heuristics().unwrap_or_default();
                     
                     let mut ai_t: Vec<AiTarget> = Vec::new();
@@ -1709,9 +1681,7 @@ pub fn start_background_scanner(app: AppHandle) {
 }
 
 fn save_suggestions(app: &AppHandle, suggestions: Vec<Suggestion>) {
-    let app_dir = app.path().app_data_dir().unwrap();
-    let db_path = app_dir.join("filenova.db");
-    if let Ok(conn) = db::init_db(&db_path) {
+    if let Ok(conn) = db::get_conn(app) {
         for s in suggestions {
             let count: i64 = conn
                 .query_row(
@@ -1772,9 +1742,7 @@ fn save_suggestions(app: &AppHandle, suggestions: Vec<Suggestion>) {
 
 #[tauri::command]
 pub fn reject_suggestion(app: AppHandle, id: i64) -> Result<(), String> {
-    let app_dir = app.path().app_data_dir().unwrap();
-    let db_path = app_dir.join("filenova.db");
-    let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
+    let conn = db::get_conn(&app)?;
 
     conn.execute(
         "UPDATE suggestions SET status = 'rejected', resolved_at = ?2 WHERE id = ?1",
@@ -1786,9 +1754,7 @@ pub fn reject_suggestion(app: AppHandle, id: i64) -> Result<(), String> {
 
 #[tauri::command]
 pub fn modify_suggestion(app: AppHandle, id: i64, updated_plan: String) -> Result<(), String> {
-     let app_dir = app.path().app_data_dir().unwrap();
-    let db_path = app_dir.join("filenova.db");
-    let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
+    let conn = db::get_conn(&app)?;
 
     conn.execute(
         "UPDATE suggestions SET plan_json = ?2, status = 'modified' WHERE id = ?1",
@@ -1955,9 +1921,7 @@ pub fn on_file_change(app: AppHandle) {
 #[tauri::command]
 pub async fn get_structure_proposal(app: AppHandle, path: String) -> Result<SuggestionPlan, String> {
     let engine = SuggestionEngine::new(app.clone());
-    let app_dir = app.path().app_data_dir().unwrap();
-    let db_path = app_dir.join("filenova.db");
-    let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
+    let conn = db::get_conn(&app)?;
     let config = EmbeddingConfig::from_settings(&conn);
 
     engine.propose_structure_reorganization(&path, &config).await
@@ -1965,9 +1929,7 @@ pub async fn get_structure_proposal(app: AppHandle, path: String) -> Result<Sugg
 
 #[tauri::command]
 pub async fn apply_structure_plan(app: AppHandle, plan: SuggestionPlan) -> Result<String, String> {
-    let app_dir = app.path().app_data_dir().unwrap();
-    let db_path = app_dir.join("filenova.db");
-    let conn = db::init_db(&db_path).map_err(|e| e.to_string())?;
+    let conn = db::get_conn(&app)?;
 
     let conflicts: Vec<String> = plan
         .moves

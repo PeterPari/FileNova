@@ -51,10 +51,10 @@ export const TagManager: React.FC<TagManagerProps> = ({ filePath, onClose }) => 
     };
 
     return (
-        <div className="p-4 bg-gray-800 rounded-lg shadow-lg border border-gray-700 w-80">
+        <div className="p-4 bg-surface rounded-lg border border-base w-80" style={{ boxShadow: 'var(--shadow-lg)' }}>
             <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-semibold text-white">Manage Tags</h3>
-                <button onClick={onClose} className="text-gray-400 hover:text-white">&times;</button>
+                <button onClick={onClose} className="text-muted hover:text-white">&times;</button>
             </div>
 
             <div className="mb-4">
@@ -65,7 +65,7 @@ export const TagManager: React.FC<TagManagerProps> = ({ filePath, onClose }) => 
                             <button onClick={() => handleRemoveTag(tag.id)} className="hover:text-red-400 ml-1">&times;</button>
                         </span>
                     ))}
-                    {fileTags.length === 0 && <span className="text-gray-500 text-sm">No tags yet.</span>}
+                    {fileTags.length === 0 && <span className="text-muted text-sm">No tags yet.</span>}
                 </div>
             </div>
 
@@ -75,7 +75,7 @@ export const TagManager: React.FC<TagManagerProps> = ({ filePath, onClose }) => 
                     value={newTag}
                     onChange={(e) => setNewTag(e.target.value)}
                     placeholder="Add tag..."
-                    className="flex-1 bg-gray-700 text-white rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500"
+                    className="flex-1 bg-surface-hover text-white rounded px-2 py-1 border border-base focus:outline-none focus:border-blue-500"
                     onKeyDown={(e) => e.key === 'Enter' && handleAddTag()}
                     list="available-tags"
                 />
@@ -88,11 +88,11 @@ export const TagManager: React.FC<TagManagerProps> = ({ filePath, onClose }) => 
             <button
                 onClick={handleAutoTag}
                 disabled={isAutoTagging}
-                className={`w-full py-2 rounded flex justify-center items-center gap-2 ${isAutoTagging ? 'bg-gray-600 cursor-wait' : 'bg-purple-600 hover:bg-purple-700 text-white'}`}
+                className={`w-full py-2 rounded flex justify-center items-center gap-2 ${isAutoTagging ? 'bg-surface-active cursor-wait' : 'bg-purple-600 hover:bg-purple-700 text-white'}`}
             >
                 {isAutoTagging ? 'Analyzing...' : '✨ Auto-Tag with AI'}
             </button>
-            {isAutoTagging && <p className="text-xs text-center mt-2 text-gray-400">This may take a few seconds...</p>}
+            {isAutoTagging && <p className="text-xs text-center mt-2 text-muted">This may take a few seconds...</p>}
         </div>
     );
 };

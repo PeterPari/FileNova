@@ -87,14 +87,47 @@ pub fn get_index_status(state: State<IndexerState>) -> IndexStatus {
 
 #[tauri::command]
 pub fn get_app_setting(app: AppHandle, key: String) -> Result<Option<String>, String> {
+    if is_secret_key(&key) {
+        return Err("Access denied for secure setting key".to_string());
+    }
     let conn = crate::db::get_conn(&app)?;
     get_setting(&conn, &key).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn save_app_setting(app: AppHandle, key: String, value: String) -> Result<(), String> {
+    if is_secret_key(&key) {
+        return Err("Access denied for secure setting key".to_string());
+    }
     let conn = crate::db::get_conn(&app)?;
     save_setting(&conn, &key, &value).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_openai_api_key() -> Result<Option<String>, String> {
+    crate::db::get_secret("openai_api_key")
+}
+
+#[tauri::command]
+pub fn save_openai_api_key(value: String) -> Result<(), String> {
+    crate::db::save_secret("openai_api_key", &value)
+}
+
+#[tauri::command]
+pub fn save_gemini_api_key(value: String) -> Result<(), String> {
+    crate::db::save_secret("gemini_api_key", &value)
+}
+
+#[tauri::command]
+pub fn get_gemini_api_key() -> Result<Option<String>, String> {
+    crate::db::get_secret("gemini_api_key")
+}
+
+fn is_secret_key(key: &str) -> bool {
+    matches!(
+        key,
+        "openai_api_key" | "gemini_api_key" | "api_key" | "secret" | "token"
+    )
 }
 
 #[tauri::command]

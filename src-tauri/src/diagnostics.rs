@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::path::Path;
 use sysinfo::System;
 use tauri::Manager;
 
@@ -80,9 +81,52 @@ pub async fn generate_diagnostics<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-pub async fn write_diagnostic_report(path: String, content: String) -> Result<(), String> {
-    fs::write(&path, content).map_err(|e| e.to_string())?;
-    Ok(())
+pub async fn write_diagnostic_report<R: tauri::Runtime>(
+    app_handle: tauri::AppHandle<R>,
+    path: String,
+    content: String,
+) -> Result<String, String> {
+    if content.len() > 5 * 1024 * 1024 {
+        return Err("Diagnostic report exceeds 5MB safety limit".to_string());
+    }
+
+    let app_data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
+    let diagnostics_dir = app_data_dir.join("diagnostics");
+    fs::create_dir_all(&diagnostics_dir).map_err(|e| e.to_string())?;
+
+    let requested_name = Path::new(&path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("Invalid diagnostic filename")?;
+
+    let safe_name: String = requested_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+
+    let ext = Path::new(&safe_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    if !matches!(ext.as_str(), "txt" | "log" | "json" | "md") {
+        return Err("Unsupported diagnostic report extension".to_string());
+    }
+
+    let output_path = diagnostics_dir.join(safe_name);
+    fs::write(&output_path, content).map_err(|e| e.to_string())?;
+
+    Ok(output_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]

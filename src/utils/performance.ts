@@ -213,6 +213,12 @@ export class ImageLoader {
   private static loadedImages = new Set<string>();
   private static errorImages = new Set<string>();
   private static maxConcurrent = 6;
+  private static slotResolvers: Array<() => void> = [];
+
+  private static async waitForSlot(): Promise<void> {
+    if (this.loadingImages.size < this.maxConcurrent) return;
+    return new Promise(resolve => this.slotResolvers.push(resolve));
+  }
 
   static async load(url: string): Promise<void> {
     if (this.loadedImages.has(url)) {
@@ -223,10 +229,8 @@ export class ImageLoader {
       throw new Error('Image previously failed to load');
     }
 
-    // Wait if too many concurrent loads
-    while (this.loadingImages.size >= this.maxConcurrent) {
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
+    // Wait for a free slot (no busy-wait)
+    await this.waitForSlot();
 
     this.loadingImages.add(url);
 
@@ -244,6 +248,8 @@ export class ImageLoader {
       throw error;
     } finally {
       this.loadingImages.delete(url);
+      const next = this.slotResolvers.shift();
+      if (next) next();
     }
   }
 

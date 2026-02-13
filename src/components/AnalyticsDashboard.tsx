@@ -1,37 +1,10 @@
 import { useEffect, useState, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend } from 'recharts';
-import { FileEntry, useFileStore } from '../store/fileStore';
+import { useFileStore } from '../store/fileStore';
 import { HardDrive, File } from 'lucide-react';
 import { Treemap } from './Treemap';
 import { getParentPath } from '../utils/path';
-
-interface FileTypeStats {
-    category: string;
-    size: number;
-    count: number;
-}
-
-interface StorageBreakdown {
-    total_size: number;
-    file_count: number;
-    breakdown: FileTypeStats[];
-}
-
-interface DuplicateSummary {
-    total_groups: number;
-    total_wasted_bytes: number;
-    exact_groups: number;
-    perceptual_groups: number;
-    smart_groups: number;
-}
-
-interface FolderSize {
-    name: string;
-    path: string;
-    size: number;
-    category: string;
-}
+import { useAnalyticsData } from '../hooks/useAnalyticsData';
 
 // Updated Compass/FileNova Theme Colors
 const COLORS = [
@@ -46,18 +19,18 @@ const COLORS = [
 
 export const AnalyticsDashboard = () => {
     const { currentPath, setCurrentPath, setCurrentView } = useFileStore();
-    const [breakdown, setBreakdown] = useState<StorageBreakdown | null>(null);
-    const [duplicateSummary, setDuplicateSummary] = useState<DuplicateSummary | null>(null);
-    const [largestFiles, setLargestFiles] = useState<FileEntry[]>([]);
-    const [folderSizes, setFolderSizes] = useState<FolderSize[]>([]);
-    const [tagStats, setTagStats] = useState<{ tag: string, count: number }[]>([]);
-    const [treemapData, setTreemapData] = useState<any>(null);
+    const {
+        breakdown,
+        duplicateSummary,
+        largestFiles,
+        folderSizes,
+        tagStats,
+        sortedLargestFiles,
+        treemapData,
+        setSortKey,
+    } = useAnalyticsData(currentPath);
     const containerRef = useRef<HTMLDivElement>(null);
     const [dimensions, setDimensions] = useState({ width: 600, height: 400 });
-    const [largestSort, setLargestSort] = useState<{ key: 'size' | 'path' | 'type' | 'name'; direction: 'asc' | 'desc' }>({
-        key: 'size',
-        direction: 'desc'
-    });
 
     useEffect(() => {
         if (containerRef.current) {
@@ -67,53 +40,6 @@ export const AnalyticsDashboard = () => {
             });
         }
     }, [containerRef.current]);
-
-    useEffect(() => {
-        fetchData();
-    }, [currentPath]);
-
-    useEffect(() => {
-        fetchGlobalData();
-    }, []);
-
-    // Prepare Treemap data when folderSizes change
-    useEffect(() => {
-        if (folderSizes.length > 0) {
-            // Convert folderSizes to hierarchy
-            // For now, just one level depth for simplicity, or we can fetch deeper.
-            // Treemap expects { name: 'root', children: [...] }
-            setTreemapData({
-                name: 'root',
-                children: folderSizes.map(f => ({ name: f.name, value: f.size, path: f.path, category: f.category }))
-            });
-        }
-    }, [folderSizes]);
-
-    const fetchGlobalData = async () => {
-        try {
-            const bd = await invoke<StorageBreakdown>('get_storage_breakdown');
-            setBreakdown(bd);
-            const dup = await invoke<DuplicateSummary>('get_duplicate_summary');
-            setDuplicateSummary(dup);
-            const lf = await invoke<FileEntry[]>('get_largest_files', { limit: 50 });
-            setLargestFiles(lf);
-            const ts = await invoke<{ tag: string, count: number }[]>('get_tag_stats');
-            setTagStats(ts);
-        } catch (e) {
-            console.error(e);
-        }
-    };
-
-    const fetchData = async () => {
-        try {
-            if (currentPath) {
-                const fs = await invoke<FolderSize[]>('get_folder_sizes', { path: currentPath });
-                setFolderSizes(fs);
-            }
-        } catch (e) {
-            console.error(e);
-        }
-    };
 
     const formatSize = (bytes: number) => {
         if (bytes === 0) return '0 B';
@@ -130,36 +56,6 @@ export const AnalyticsDashboard = () => {
     };
 
     const getFileTypeLabel = (name: string) => name.split('.').pop()?.toUpperCase() || 'FILE';
-
-    const sortedLargestFiles = [...largestFiles].sort((a, b) => {
-        let compare = 0;
-        switch (largestSort.key) {
-            case 'size':
-                compare = a.size - b.size;
-                break;
-            case 'path':
-                compare = a.path.localeCompare(b.path);
-                break;
-            case 'type':
-                compare = getFileTypeLabel(a.name).localeCompare(getFileTypeLabel(b.name));
-                break;
-            case 'name':
-            default:
-                compare = a.name.localeCompare(b.name);
-                break;
-        }
-        return largestSort.direction === 'asc' ? compare : -compare;
-    });
-
-    const handleSort = (key: 'size' | 'path' | 'type' | 'name') => {
-        setLargestSort(prev => {
-            if (prev.key === key) {
-                return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
-            }
-            const defaultDir = key === 'size' ? 'desc' : 'asc';
-            return { key, direction: defaultDir };
-        });
-    };
 
     const navigateToFile = async (path: string) => {
         const parent = getParentPath(path);
@@ -345,10 +241,10 @@ export const AnalyticsDashboard = () => {
                     <table className="w-full text-left text-sm text-secondary dark:text-gray-400">
                         <thead className="bg-gray-50 dark:bg-gray-900/50 text-xs uppercase text-gray-700 dark:text-gray-300">
                             <tr>
-                                <th className="px-6 py-3 cursor-pointer" onClick={() => handleSort('name')}>Name</th>
-                                <th className="px-6 py-3 cursor-pointer" onClick={() => handleSort('path')}>Path</th>
-                                <th className="px-6 py-3 cursor-pointer" onClick={() => handleSort('size')}>Size</th>
-                                <th className="px-6 py-3 cursor-pointer" onClick={() => handleSort('type')}>Type</th>
+                                <th className="px-6 py-3 cursor-pointer" onClick={() => setSortKey('name')}>Name</th>
+                                <th className="px-6 py-3 cursor-pointer" onClick={() => setSortKey('path')}>Path</th>
+                                <th className="px-6 py-3 cursor-pointer" onClick={() => setSortKey('size')}>Size</th>
+                                <th className="px-6 py-3 cursor-pointer" onClick={() => setSortKey('type')}>Type</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200 dark:divide-gray-700">

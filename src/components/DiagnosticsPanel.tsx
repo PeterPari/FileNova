@@ -70,8 +70,8 @@ export const DiagnosticsPanel: React.FC = () => {
           logger.exportLogs(),
         ].join('\n');
 
-        await invoke('write_diagnostic_report', { path: filePath, content: report });
-        logger.info('Diagnostics exported successfully', 'Diagnostics', { path: filePath });
+        const exportedPath = await invoke<string>('write_diagnostic_report', { path: filePath, content: report });
+        logger.info('Diagnostics exported successfully', 'Diagnostics', { path: exportedPath });
       }
     } catch (error) {
       logger.error('Failed to export diagnostics', 'Diagnostics', error);

@@ -136,7 +136,10 @@ pub fn scan_duplicates(app: AppHandle, state: DuplicateScanState) {
     state.total_files.store(0, Ordering::SeqCst);
 
     std::thread::spawn(move || {
-        let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
+        let db_path = match app.path().app_data_dir() {
+            Ok(dir) => dir.join("filenova.db"),
+            Err(_) => return,
+        };
         let mut conn = Connection::open(&db_path).expect("Failed to open DB for duplicate scan");
         let _ = conn.execute("PRAGMA journal_mode = WAL;", []);
         let _ = conn.execute("PRAGMA synchronous = NORMAL;", []);

@@ -57,8 +57,10 @@ export const KeyboardShortcutsModal = ({ isOpen, onClose }: KeyboardShortcutsMod
     const [editingKeys, setEditingKeys] = useState<string[]>([]);
     const [selectedCategory, setSelectedCategory] = useState<string>('All');
 
+    /**
+     * Load persisted shortcuts once on mount and persist whenever `shortcuts` changes.
+     */
     useEffect(() => {
-        // Load custom shortcuts from localStorage
         const saved = localStorage.getItem('keyboardShortcuts');
         if (saved) {
             try {
@@ -69,6 +71,15 @@ export const KeyboardShortcutsModal = ({ isOpen, onClose }: KeyboardShortcutsMod
             }
         }
     }, []);
+
+    useEffect(() => {
+        // Persist normalized shortcuts whenever they change
+        try {
+            localStorage.setItem('keyboardShortcuts', JSON.stringify(shortcuts));
+        } catch (e) {
+            console.error('Failed to persist shortcuts:', e);
+        }
+    }, [shortcuts]);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -85,8 +96,11 @@ export const KeyboardShortcutsModal = ({ isOpen, onClose }: KeyboardShortcutsMod
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isOpen, onClose]);
 
-    const saveShortcuts = () => {
-        localStorage.setItem('keyboardShortcuts', JSON.stringify(shortcuts));
+    const normalizeKeys = (keys: string[]) => {
+        return keys
+            .map(k => k.trim().toLowerCase())
+            .filter(Boolean)
+            .join('+');
     };
 
     const resetToDefaults = () => {
@@ -104,10 +118,10 @@ export const KeyboardShortcutsModal = ({ isOpen, onClose }: KeyboardShortcutsMod
     const saveEdit = () => {
         if (!editingId) return;
 
-        // Check for conflicts
+        // Check for conflicts using normalized canonical string
+        const newKeySig = normalizeKeys(editingKeys);
         const conflict = shortcuts.find(
-            s => s.id !== editingId && 
-            JSON.stringify(s.keys) === JSON.stringify(editingKeys)
+            s => s.id !== editingId && normalizeKeys(s.keys) === newKeySig
         );
 
         if (conflict) {
@@ -119,7 +133,6 @@ export const KeyboardShortcutsModal = ({ isOpen, onClose }: KeyboardShortcutsMod
             prev.map(s => (s.id === editingId ? { ...s, keys: editingKeys } : s))
         );
         setEditingId(null);
-        saveShortcuts();
     };
 
     const cancelEdit = () => {
@@ -140,28 +153,28 @@ export const KeyboardShortcutsModal = ({ isOpen, onClose }: KeyboardShortcutsMod
             onClick={onClose}
         >
             <div
-                className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col"
+                className="bg-base rounded-lg shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col"
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* Header */}
-                <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
+                <div className="flex items-center justify-between p-6 border-b border-base">
                     <div>
                         <h2 className="text-2xl font-semibold">Keyboard Shortcuts</h2>
-                        <p className="text-sm text-gray-500 mt-1">
+                        <p className="text-sm text-muted mt-1">
                             Customize keyboard shortcuts for FileNova
                         </p>
                     </div>
                     <div className="flex items-center gap-2">
                         <button
                             onClick={resetToDefaults}
-                            className="px-3 py-1.5 text-sm bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded flex items-center gap-2"
+                            className="px-3 py-1.5 text-sm bg-surface-hover hover:bg-surface-active rounded flex items-center gap-2"
                         >
                             <RotateCcw size={14} />
                             Reset
                         </button>
                         <button
                             onClick={onClose}
-                            className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded"
+                            className="p-2 hover:bg-surface-hover rounded"
                         >
                             <X size={20} />
                         </button>
@@ -169,7 +182,7 @@ export const KeyboardShortcutsModal = ({ isOpen, onClose }: KeyboardShortcutsMod
                 </div>
 
                 {/* Category Tabs */}
-                <div className="flex gap-2 px-6 py-3 border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
+                <div className="flex gap-2 px-6 py-3 border-b border-base overflow-x-auto">
                     {categories.map((category) => (
                         <button
                             key={category}
@@ -177,7 +190,7 @@ export const KeyboardShortcutsModal = ({ isOpen, onClose }: KeyboardShortcutsMod
                             className={`px-3 py-1 text-sm rounded transition-colors whitespace-nowrap ${
                                 selectedCategory === category
                                     ? 'bg-blue-500 text-white'
-                                    : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600'
+                                    : 'bg-surface-hover hover:bg-surface-active'
                             }`}
                         >
                             {category}
@@ -191,11 +204,11 @@ export const KeyboardShortcutsModal = ({ isOpen, onClose }: KeyboardShortcutsMod
                         {filteredShortcuts.map((shortcut) => (
                             <div
                                 key={shortcut.id}
-                                className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded hover:bg-gray-100 dark:hover:bg-gray-750"
+                                className="flex items-center justify-between p-3 bg-surface rounded hover:bg-surface-hover"
                             >
                                 <div className="flex-1">
                                     <div className="font-medium">{shortcut.action}</div>
-                                    <div className="text-sm text-gray-500">{shortcut.description}</div>
+                                    <div className="text-sm text-muted">{shortcut.description}</div>
                                 </div>
 
                                 <div className="flex items-center gap-3">

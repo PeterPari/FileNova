@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { Copy, Search, Undo2, AlertCircle } from 'lucide-react';
 import { useDuplicateStore, DuplicateScanStatus } from '../store/duplicateStore';
@@ -37,6 +37,7 @@ export const DuplicateReview = () => {
     } = useDuplicateStore();
 
     const [localScanStatus, setLocalScanStatus] = useState<DuplicateScanStatus | null>(null);
+    const hideProgressTimeoutRef = useRef<number | null>(null);
 
     // Fetch data on mount
     useEffect(() => {
@@ -60,7 +61,13 @@ export const DuplicateReview = () => {
             fetchSummary();
             fetchGroups();
             // Auto-hide progress after 3 seconds
-            setTimeout(() => setLocalScanStatus(null), 3000);
+            if (hideProgressTimeoutRef.current !== null) {
+                window.clearTimeout(hideProgressTimeoutRef.current);
+            }
+            hideProgressTimeoutRef.current = window.setTimeout(() => {
+                setLocalScanStatus(null);
+                hideProgressTimeoutRef.current = null;
+            }, 3000);
         }).then((unlisten) => unlisteners.push(unlisten));
 
         listen('duplicates-changed', () => {
@@ -71,6 +78,10 @@ export const DuplicateReview = () => {
 
         return () => {
             unlisteners.forEach((u) => u());
+            if (hideProgressTimeoutRef.current !== null) {
+                window.clearTimeout(hideProgressTimeoutRef.current);
+                hideProgressTimeoutRef.current = null;
+            }
         };
     }, []);
 

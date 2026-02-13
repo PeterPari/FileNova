@@ -4,6 +4,9 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::env;
 use log::info;
+use tauri::AppHandle;
+
+use crate::db;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SuggestedFolder {
@@ -90,35 +93,49 @@ pub async fn select_folder_dialog() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn start_initial_indexing(
+    app: AppHandle,
     folders: Vec<String>,
     ai_provider: String,
 ) -> Result<(), String> {
-    // This would trigger the actual indexing process
-    // For now, just log the request
     info!("Starting initial indexing for folders: {:?}", folders);
     info!("Using AI provider: {}", ai_provider);
-    
-    // In a real implementation, this would:
-    // 1. Store the selected folders in the database
-    // 2. Start the indexing process
-    // 3. Emit progress events
+
+    let conn = db::get_conn(&app)?;
+
+    let folders_json = serde_json::to_string(&folders)
+        .map_err(|e| format!("Failed to serialize folder list: {}", e))?;
+
+    db::save_setting(&conn, "indexed_paths", &folders_json)
+        .map_err(|e| e.to_string())?;
+    db::save_setting(&conn, "ai_provider", &ai_provider)
+        .map_err(|e| e.to_string())?;
+    db::save_setting(&conn, "onboarding_started", "true")
+        .map_err(|e| e.to_string())?;
     
     Ok(())
 }
 
 #[tauri::command]
-pub async fn set_onboarding_completed(completed: bool) -> Result<(), String> {
-    // Store onboarding completion status
-    // This would typically be saved to a settings file or database
+pub async fn set_onboarding_completed(app: AppHandle, completed: bool) -> Result<(), String> {
     info!("Onboarding completed: {}", completed);
+    let conn = db::get_conn(&app)?;
+    db::save_setting(
+        &conn,
+        "onboarding_completed",
+        if completed { "true" } else { "false" },
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn get_onboarding_status() -> Result<bool, String> {
-    // Check if onboarding has been completed
-    // For now, return false to show onboarding
-    Ok(false)
+pub async fn get_onboarding_status(app: AppHandle) -> Result<bool, String> {
+    let conn = db::get_conn(&app)?;
+    let completed = db::get_setting(&conn, "onboarding_completed")
+        .map_err(|e| e.to_string())?
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    Ok(completed)
 }
 
 // ─── Sample Data Generation ──────────────────────────────────────────────────

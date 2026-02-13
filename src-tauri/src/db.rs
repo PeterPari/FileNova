@@ -1,11 +1,37 @@
 use rusqlite::{Connection, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tauri::Manager;
+
+const SECRET_SERVICE_NAME: &str = "filenova";
 
 /// Connection pool for the application databases.
 pub struct DbPool {
     pub main: r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>,
     pub preview: r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AppPaths {
+    pub db_path: PathBuf,
+    pub preview_db_path: PathBuf,
+    pub index_path: PathBuf,
+    pub vector_path: PathBuf,
+    pub trash_dir: PathBuf,
+}
+
+pub fn resolve_app_paths(app: &tauri::AppHandle) -> std::result::Result<AppPaths, String> {
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data dir unavailable: {}", e))?;
+
+    Ok(AppPaths {
+        db_path: app_dir.join("filenova.db"),
+        preview_db_path: app_dir.join("file_nova.db"),
+        index_path: app_dir.join("search_index"),
+        vector_path: app_dir.join("vector_store"),
+        trash_dir: app_dir.join("filenova-trash"),
+    })
 }
 
 impl DbPool {
@@ -50,6 +76,14 @@ pub fn get_conn(app: &tauri::AppHandle) -> std::result::Result<r2d2::PooledConne
 pub fn get_preview_conn(app: &tauri::AppHandle) -> std::result::Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>, String> {
     let pool = app.state::<DbPool>();
     pool.preview.get().map_err(|e| format!("Pool error: {}", e))
+}
+
+pub fn get_setting_i64(conn: &Connection, key: &str, default_value: i64) -> i64 {
+    get_setting(conn, key)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(default_value)
 }
 
 pub fn init_db<P: AsRef<Path>>(path: P) -> Result<Connection> {
@@ -357,13 +391,10 @@ pub fn init_db<P: AsRef<Path>>(path: P) -> Result<Connection> {
         [],
     )?;
 
-    // Check for API Key in environment variables (for development) 
-    // or let the user enter it via settings UI later.
+    // Check for API Key in environment variables (for development)
+    // and store it in the OS credential vault instead of plaintext DB.
     if let Ok(api_key) = std::env::var("GEMINI_API_KEY") {
-        conn.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES ('gemini_api_key', ?1)",
-            [api_key],
-        )?;
+        let _ = save_secret("gemini_api_key", &api_key);
     }
 
     // Stage 10: Recent Files table
@@ -412,6 +443,33 @@ pub fn save_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
         [key, value],
     )?;
     Ok(())
+}
+
+pub fn get_secret(key: &str) -> std::result::Result<Option<String>, String> {
+    let entry = keyring::Entry::new(SECRET_SERVICE_NAME, key)
+        .map_err(|e| format!("Failed to initialize secure store entry: {}", e))?;
+
+    match entry.get_password() {
+        Ok(secret) => Ok(Some(secret)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(format!("Failed to read secure setting '{}': {}", key, e)),
+    }
+}
+
+pub fn save_secret(key: &str, value: &str) -> std::result::Result<(), String> {
+    let entry = keyring::Entry::new(SECRET_SERVICE_NAME, key)
+        .map_err(|e| format!("Failed to initialize secure store entry: {}", e))?;
+
+    if value.trim().is_empty() {
+        match entry.delete_credential() {
+            Ok(_) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(format!("Failed to clear secure setting '{}': {}", key, e)),
+        }
+    } else {
+        entry
+            .set_password(value)
+            .map_err(|e| format!("Failed to save secure setting '{}': {}", key, e))
+    }
 }
 
 #[cfg(test)]

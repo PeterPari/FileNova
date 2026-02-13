@@ -73,18 +73,18 @@ const SuggestionCard: React.FC<SuggestionCardProps> = ({ suggestion, onAccept, o
     };
 
     return (
-        <div className="bg-gray-800 rounded-lg p-4 mb-4 border border-gray-700 shadow-lg relative overflow-hidden group">
+        <div className="bg-surface rounded-lg p-4 mb-4 border border-base shadow-theme-lg relative overflow-hidden group">
             {/* Status Indicator Stripe */}
             <div className={`absolute left-0 top-0 bottom-0 w-1 ${suggestion.status === 'modified' ? 'bg-blue-400' : 'bg-transparent'}`}></div>
 
             <div className="flex justify-between items-start pl-2">
                 <div className="flex items-center gap-3">
-                    <div className="text-2xl p-2 bg-gray-700 rounded-lg shadow-inner">
+                    <div className="text-2xl p-2 bg-surface-hover rounded-lg shadow-inner">
                         <Icon />
                     </div>
                     <div>
                         <h3 className="text-lg font-bold text-white tracking-tight">{suggestion.title}</h3>
-                        <p className="text-gray-400 text-sm leading-snug">{suggestion.description}</p>
+                        <p className="text-muted text-sm leading-snug">{suggestion.description}</p>
                     </div>
                 </div>
                 <div className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider ${getConfidenceColor(suggestion.confidence)}`}>
@@ -92,14 +92,14 @@ const SuggestionCard: React.FC<SuggestionCardProps> = ({ suggestion, onAccept, o
                 </div>
             </div>
 
-            <div className="mt-4 flex gap-3 text-xs text-gray-300 pl-2">
-                <span className="bg-gray-700/50 px-2 py-1 rounded border border-gray-600">
+            <div className="mt-4 flex gap-3 text-xs text-disabled pl-2">
+                <span className="bg-surface-hover px-2 py-1 rounded border border-base">
                     {suggestion.file_count} files
                 </span>
-                <span className="bg-gray-700/50 px-2 py-1 rounded border border-gray-600">
+                <span className="bg-surface-hover px-2 py-1 rounded border border-base">
                     {formatSize(suggestion.total_size_bytes)} total
                 </span>
-                <span className="bg-gray-700/50 px-2 py-1 rounded border border-gray-600 capitalize">
+                <span className="bg-surface-hover px-2 py-1 rounded border border-base capitalize">
                     {suggestion.category}
                 </span>
                 {suggestion.status === 'modified' && (
@@ -115,10 +115,10 @@ const SuggestionCard: React.FC<SuggestionCardProps> = ({ suggestion, onAccept, o
                 </div>
             )}
 
-            <div className="mt-4 flex justify-between items-center pl-2 pt-2 border-t border-gray-700/50">
+            <div className="mt-4 flex justify-between items-center pl-2 pt-2 border-t border-base">
                 <button
                     onClick={() => setShowPreview(!showPreview)}
-                    className="text-gray-400 hover:text-white text-xs font-bold uppercase tracking-wider flex items-center gap-1 transition-colors"
+                    className="text-muted hover:text-primary text-xs font-bold uppercase tracking-wider flex items-center gap-1 transition-colors"
                 >
                     {showPreview ? (
                         <><span>Hide Preview</span> <span>▲</span></>
@@ -130,19 +130,19 @@ const SuggestionCard: React.FC<SuggestionCardProps> = ({ suggestion, onAccept, o
                 <div className="flex gap-2">
                     <button
                         onClick={() => setIsEditing(true)}
-                        className="px-3 py-1.5 rounded text-sm bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors border border-gray-600"
+                        className="px-3 py-1.5 rounded text-sm bg-surface-hover hover:bg-surface-active text-disabled transition-colors border border-base"
                     >
                         Modify
                     </button>
                     <button
                         onClick={() => onReject(suggestion.id)}
-                        className="px-3 py-1.5 rounded text-sm bg-gray-700 hover:bg-red-900/50 hover:text-red-300 hover:border-red-800 text-gray-300 transition-colors border border-gray-600"
+                        className="px-3 py-1.5 rounded text-sm bg-surface-hover hover:bg-red-900/50 hover:text-red-300 hover:border-red-800 text-disabled transition-colors border border-base"
                     >
                         Reject
                     </button>
                     <button
                         onClick={() => onAccept(suggestion.id)}
-                        className="px-4 py-1.5 rounded text-sm bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold transition-all shadow-lg shadow-blue-900/20 border border-blue-500/50"
+                        className="px-4 py-1.5 rounded text-sm bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold transition-all shadow-theme-lg border border-blue-500/50"
                     >
                         Accept Suggestion
                     </button>

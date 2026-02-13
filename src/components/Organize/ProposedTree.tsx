@@ -144,7 +144,7 @@ const ProposedTree: React.FC<ProposedTreeProps> = ({ originalTree, moves }) => {
     if (!proposedTree) return <div>No data</div>;
 
     return (
-        <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 h-[500px] overflow-y-auto custom-scrollbar">
+        <div className="bg-base border border-base rounded-lg p-4 h-[500px] overflow-y-auto custom-scrollbar">
             <h3 className="text-sm font-bold text-green-400 mb-2 uppercase tracking-wider">Proposed Structure</h3>
             <FileTree node={proposedTree} />
         </div>

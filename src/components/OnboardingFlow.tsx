@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { 
   FolderOpen, 
   Brain, 
@@ -17,6 +19,17 @@ interface OnboardingFlowProps {
 
 type Step = 'welcome' | 'folders' | 'ai-provider' | 'settings' | 'indexing' | 'complete';
 
+const setupSteps: Step[] = ['folders', 'ai-provider', 'settings', 'indexing'];
+
+const stepLabels: Record<Step, string> = {
+  welcome: 'Welcome',
+  folders: 'Folders',
+  'ai-provider': 'AI Provider',
+  settings: 'Setup',
+  indexing: 'Indexing',
+  complete: 'Done',
+};
+
 interface FolderToIndex {
   path: string;
   selected: boolean;
@@ -26,7 +39,12 @@ interface FolderToIndex {
 export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) => {
   const [currentStep, setCurrentStep] = useState<Step>('welcome');
   const [foldersToIndex, setFoldersToIndex] = useState<FolderToIndex[]>([]);
-  const [aiProvider, setAiProvider] = useState<'local' | 'cloud'>('local');
+  const [aiProvider, setAiProvider] = useState<'ollama' | 'openai'>('ollama');
+  const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
+  const [embeddingModel, setEmbeddingModel] = useState('nomic-embed-text');
+  const [openaiApiKey, setOpenaiApiKey] = useState('');
+  const [geminiApiKey, setGeminiApiKey] = useState('');
+  const [setupError, setSetupError] = useState<string | null>(null);
   const [indexingProgress, setIndexingProgress] = useState(0);
   const [_isIndexing, setIsIndexing] = useState(false);
   
@@ -55,7 +73,7 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) =>
 
   const selectCustomFolder = async () => {
     try {
-      const path = await invoke<string>('select_folder_dialog');
+      const path = await open({ directory: true, multiple: false });
       if (path && !foldersToIndex.find(f => f.path === path)) {
         setFoldersToIndex([...foldersToIndex, { path, selected: true }]);
       }
@@ -74,15 +92,46 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) =>
 
   const startIndexing = async () => {
     setIsIndexing(true);
+    setSetupError(null);
     setCurrentStep('indexing');
     
     const selectedFolders = foldersToIndex.filter(f => f.selected).map(f => f.path);
+
+    if (selectedFolders.length === 0) {
+      setSetupError('Select at least one folder before starting indexing.');
+      setCurrentStep('folders');
+      setIsIndexing(false);
+      return;
+    }
+
+    if (!geminiApiKey.trim()) {
+      setSetupError('Gemini API key is required to enable AI chat.');
+      setCurrentStep('settings');
+      setIsIndexing(false);
+      return;
+    }
+
+    if (aiProvider === 'openai' && !openaiApiKey.trim()) {
+      setSetupError('OpenAI API key is required when OpenAI is selected.');
+      setCurrentStep('settings');
+      setIsIndexing(false);
+      return;
+    }
     
     try {
+      await Promise.all([
+        invoke('save_app_setting', { key: 'ai_provider', value: aiProvider }),
+        invoke('save_app_setting', { key: 'ollama_url', value: ollamaUrl }),
+        invoke('save_app_setting', { key: 'ai_embedding_model', value: embeddingModel }),
+        invoke('save_app_setting', { key: 'ai_tag_model', value: embeddingModel }),
+        invoke('save_openai_api_key', { value: openaiApiKey.trim() }),
+        invoke('save_gemini_api_key', { value: geminiApiKey.trim() }),
+      ]);
+
       // Start indexing with progress updates
       await invoke('start_initial_indexing', { 
         folders: selectedFolders,
-        aiProvider 
+        aiProvider,
       });
       
       // Simulate progress (in real implementation, this would come from backend events)
@@ -99,14 +148,66 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) =>
       }, 100);
     } catch (error) {
       console.error('Indexing failed:', error);
+      setSetupError(`Indexing failed: ${String(error)}`);
+      setCurrentStep('settings');
       setIsIndexing(false);
     }
   };
 
   const handleComplete = async () => {
-    // Save onboarding completion flag
-    await invoke('set_onboarding_completed', { completed: true });
-    onComplete();
+    try {
+      await invoke('set_onboarding_completed', { completed: true });
+    } catch (error) {
+      console.error('Failed to persist onboarding completion:', error);
+    } finally {
+      onComplete();
+    }
+  };
+
+  const selectedFolderCount = foldersToIndex.filter((f) => f.selected).length;
+  const setupStepIndex = setupSteps.indexOf(currentStep);
+
+  const renderProgressHeader = () => {
+    if (setupStepIndex === -1) return null;
+
+    return (
+      <div className="max-w-5xl mx-auto px-6 pt-6">
+        <div className="bg-surface border border-base rounded-xl p-4 shadow-theme-sm">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-sm text-secondary">Setup progress</p>
+            <p className="text-xs text-muted">
+              Step {setupStepIndex + 1} of {setupSteps.length}
+            </p>
+          </div>
+          <div className="w-full h-2 rounded-full bg-tertiary overflow-hidden">
+            <div
+              className="h-full bg-accent-primary transition-theme"
+              style={{ width: `${((setupStepIndex + 1) / setupSteps.length) * 100}%` }}
+            />
+          </div>
+          <div className="grid grid-cols-4 gap-2 mt-3">
+            {setupSteps.map((step, index) => {
+              const isActive = step === currentStep;
+              const isComplete = index < setupStepIndex;
+              return (
+                <div
+                  key={step}
+                  className={`text-xs rounded-md px-2 py-1 text-center border transition-theme ${
+                    isActive
+                      ? 'border-accent-primary/50 text-accent-primary bg-surface-hover'
+                      : isComplete
+                        ? 'border-base text-secondary bg-surface-hover'
+                        : 'border-base text-muted bg-base'
+                  }`}
+                >
+                  {stepLabels[step]}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const renderWelcome = () => (
@@ -152,7 +253,7 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) =>
         </div>
       </div>
 
-      <div className="space-y-3 mb-6">
+      <div className="space-y-3 mb-4">
         {foldersToIndex.map((folder) => (
           <label
             key={folder.path}
@@ -175,6 +276,10 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) =>
             )}
           </label>
         ))}
+      </div>
+
+      <div className="text-xs text-[var(--text-secondary)] mb-6">
+        {selectedFolderCount} folder{selectedFolderCount === 1 ? '' : 's'} selected
       </div>
 
       <button
@@ -216,9 +321,12 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) =>
 
       <div className="grid grid-cols-2 gap-4 mb-8">
         <button
-          onClick={() => setAiProvider('local')}
+          onClick={() => {
+            setAiProvider('ollama');
+            setEmbeddingModel('nomic-embed-text');
+          }}
           className={`p-6 rounded-lg border-2 transition-all text-left ${
-            aiProvider === 'local'
+            aiProvider === 'ollama'
               ? 'border-[var(--accent-blue)] bg-[var(--accent-blue)]/10'
               : 'border-[var(--border-primary)] bg-[var(--bg-secondary)] hover:border-[var(--border-focus)]'
           }`}
@@ -228,30 +336,49 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) =>
             <h3 className="text-xl font-semibold text-[var(--text-primary)]">Local (Ollama)</h3>
           </div>
           <div className="space-y-2 text-sm">
-            <p className="text-[var(--text-primary)]">✓ Complete privacy - data stays on your machine</p>
-            <p className="text-[var(--text-primary)]">✓ Free to use, no API keys needed</p>
-            <p className="text-[var(--text-secondary)]">⚠ Requires Ollama installation</p>
-            <p className="text-[var(--text-secondary)]">⚠ Slower on older hardware</p>
+            <p className="text-[var(--text-primary)]">✓ Complete privacy - no data leaves your PC</p>
+            <p className="text-[var(--text-primary)]">✓ Free to use</p>
+            <p className="text-[var(--text-secondary)] flex flex-wrap gap-1">
+              ⚠ Requires <span 
+                className="text-[var(--accent-blue)] underline hover:text-[var(--accent-blue-hover)] z-10 relative"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openUrl('https://ollama.com');
+                }}
+              >Ollama</span> installed
+            </p>
+            <p className="text-[var(--text-secondary)]">⚠ Depends on your hardware speed</p>
           </div>
         </button>
 
         <button
-          onClick={() => setAiProvider('cloud')}
+          onClick={() => {
+            setAiProvider('openai');
+            setEmbeddingModel('text-embedding-3-small');
+          }}
           className={`p-6 rounded-lg border-2 transition-all text-left ${
-            aiProvider === 'cloud'
+            aiProvider === 'openai'
               ? 'border-[var(--accent-blue)] bg-[var(--accent-blue)]/10'
               : 'border-[var(--border-primary)] bg-[var(--bg-secondary)] hover:border-[var(--border-focus)]'
           }`}
         >
           <div className="flex items-center gap-3 mb-3">
             <Brain size={24} className="text-[var(--accent-green)]" />
-            <h3 className="text-xl font-semibold text-[var(--text-primary)]">Cloud (OpenAI/Claude)</h3>
+            <h3 className="text-xl font-semibold text-[var(--text-primary)]">Cloud (OpenAI)</h3>
           </div>
           <div className="space-y-2 text-sm">
-            <p className="text-[var(--text-primary)]">✓ Faster and more powerful</p>
-            <p className="text-[var(--text-primary)]">✓ Works on any hardware</p>
-            <p className="text-[var(--text-secondary)]">⚠ Requires API key (paid)</p>
-            <p className="text-[var(--text-secondary)]">⚠ Data sent to cloud service</p>
+            <p className="text-[var(--text-primary)]">✓ Higher accuracy & speed</p>
+            <p className="text-[var(--text-primary)]">✓ Works on any computer</p>
+            <p className="text-[var(--text-secondary)] flex flex-wrap gap-1">
+              ⚠ Requires <span 
+                className="text-[var(--accent-blue)] underline hover:text-[var(--accent-blue-hover)] z-10 relative"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openUrl('https://platform.openai.com/api-keys');
+                }}
+              >OpenAI API Key</span>
+            </p>
+            <p className="text-[var(--text-secondary)]">⚠ Small cost per usage</p>
           </div>
         </button>
       </div>
@@ -277,11 +404,94 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) =>
   const renderSettings = () => (
     <div className="p-8 max-w-3xl mx-auto">
       <h2 className="text-3xl font-bold text-[var(--text-primary)] mb-2">
-        Initial Settings
+        Configure Intelligence
       </h2>
       <p className="text-[var(--text-secondary)] mb-6">
-        Customize your FileNova experience. You can change these later in Settings.
+        Set up the AI keys needed for smart features. You can change these later in Settings.
       </p>
+
+      <div className="bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded-lg p-4 mb-6">
+        <h3 className="text-lg font-semibold text-[var(--text-primary)] mb-2 flex items-center gap-2">
+          <Brain size={18} />
+          Why do I need these keys?
+        </h3>
+        <ul className="text-sm text-[var(--text-secondary)] space-y-2 list-disc pl-5">
+          {aiProvider === 'ollama' ? (
+            <li>
+              <strong>Ollama (Local):</strong> Free and private. Download from <button onClick={() => openUrl('https://ollama.com')} className="text-[var(--accent-blue)] hover:underline inline">ollama.com</button>. Keep Ollama running in the background while using FileNova.
+            </li>
+          ) : (
+            <li>
+              <strong>OpenAI (Cloud):</strong> Requires a paid API key from the <button onClick={() => openUrl('https://platform.openai.com/api-keys')} className="text-[var(--accent-blue)] hover:underline inline">OpenAI Platform</button>.
+            </li>
+          )}
+          <li>
+            <strong>Gemini (Chat):</strong> Used for the AI Chat feature. Get a free key from <button onClick={() => openUrl('https://aistudio.google.com/app/apikey')} className="text-[var(--accent-blue)] hover:underline inline">Google AI Studio</button>.
+          </li>
+        </ul>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
+        <div className={`rounded-lg border p-3 text-sm ${selectedFolderCount > 0 ? 'border-[var(--accent-green)]/40 bg-[var(--accent-green)]/10 text-[var(--text-primary)]' : 'border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-secondary)]'}`}>
+          Indexed folders: <span className="font-semibold">{selectedFolderCount}</span>
+        </div>
+        <div className={`rounded-lg border p-3 text-sm ${geminiApiKey.trim() ? 'border-[var(--accent-green)]/40 bg-[var(--accent-green)]/10 text-[var(--text-primary)]' : 'border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-secondary)]'}`}>
+          Gemini key: <span className="font-semibold">{geminiApiKey.trim() ? 'Configured' : 'Required'}</span>
+        </div>
+      </div>
+
+      <div className="space-y-4 mb-6">
+        {aiProvider === 'ollama' ? (
+          <div>
+            <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">Ollama URL</label>
+            <input
+              type="text"
+              value={ollamaUrl}
+              onChange={(e) => setOllamaUrl(e.target.value)}
+              className="w-full px-3 py-2 border border-[var(--border-primary)] rounded-lg bg-[var(--bg-secondary)] text-[var(--text-primary)]"
+              placeholder="http://localhost:11434"
+            />
+          </div>
+        ) : (
+          <div>
+            <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">OpenAI API Key</label>
+            <input
+              type="password"
+              value={openaiApiKey}
+              onChange={(e) => setOpenaiApiKey(e.target.value)}
+              className="w-full px-3 py-2 border border-[var(--border-primary)] rounded-lg bg-[var(--bg-secondary)] text-[var(--text-primary)]"
+              placeholder="sk-..."
+            />
+          </div>
+        )}
+
+        <div>
+          <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">Embedding Model</label>
+          <input
+            type="text"
+            value={embeddingModel}
+            onChange={(e) => setEmbeddingModel(e.target.value)}
+            className="w-full px-3 py-2 border border-[var(--border-primary)] rounded-lg bg-[var(--bg-secondary)] text-[var(--text-primary)]"
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">Gemini API Key (required for Chat)</label>
+          <input
+            type="password"
+            value={geminiApiKey}
+            onChange={(e) => setGeminiApiKey(e.target.value)}
+            className="w-full px-3 py-2 border border-[var(--border-primary)] rounded-lg bg-[var(--bg-secondary)] text-[var(--text-primary)]"
+            placeholder="AIza..."
+          />
+        </div>
+      </div>
+
+      {setupError && (
+        <div className="mb-6 p-3 rounded-lg bg-red-900/20 border border-red-900/40 text-red-300 text-sm">
+          {setupError}
+        </div>
+      )}
 
       <div className="space-y-6">
         {/* Theme */}
@@ -328,6 +538,7 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) =>
         </button>
         <button
           onClick={startIndexing}
+          disabled={!geminiApiKey.trim() || (aiProvider === 'openai' && !openaiApiKey.trim())}
           className="px-8 py-3 bg-[var(--accent-blue)] hover:bg-[var(--accent-blue-hover)] text-white rounded-lg font-medium flex items-center gap-2 transition-colors"
         >
           Start Indexing
@@ -393,8 +604,13 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) =>
   };
 
   return (
-    <div className="fixed inset-0 bg-[var(--bg-base)] z-50 overflow-auto">
-      {steps[currentStep]()}
+      <div className="fixed inset-0 bg-[var(--bg-base)] z-50 overflow-auto">
+      {renderProgressHeader()}
+      <div className="max-w-5xl mx-auto px-6 pb-8">
+        <div className="bg-base border border-base rounded-xl shadow-theme-md min-h-[calc(100vh-96px)]">
+          {steps[currentStep]()}
+        </div>
+      </div>
     </div>
   );
 };

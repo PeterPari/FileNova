@@ -73,7 +73,13 @@ impl EmbeddingConfig {
             }
         }
 
-        if let Ok(Some(key)) = get_setting(conn, "openai_api_key") {
+        // Security note: API keys must come from OS credential store first.
+        // We keep DB fallback only for backward compatibility during migration.
+        if let Ok(Some(key)) = crate::db::get_secret("openai_api_key") {
+            if !key.is_empty() {
+                config.openai_api_key = Some(key);
+            }
+        } else if let Ok(Some(key)) = get_setting(conn, "openai_api_key") {
             if !key.is_empty() {
                 config.openai_api_key = Some(key);
             }

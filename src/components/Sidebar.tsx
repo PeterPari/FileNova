@@ -1,7 +1,8 @@
 import { 
     HardDrive, Folder, Settings, BarChart2, Copy, Activity, Cog, Trash2, 
-    MessageSquare, Boxes, GraduationCap, PanelLeft
+    MessageSquare, Boxes, PanelLeft
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { useFileStore } from '../store/fileStore';
 import { useState } from 'react';
 import { FileNovaLogo } from './FileNovaLogo';
@@ -17,8 +18,8 @@ export const Sidebar = ({ onOpenSettings }: SidebarProps) => {
     const toggleCollapse = () => setCollapsed(!collapsed);
 
     const navItems = [
-        { id: 'browser', label: 'My Files', icon: HardDrive, action: () => setCurrentView('browser') },
-        { id: 'documents', label: 'Documents', icon: Folder, action: () => setCurrentView('browser') },
+        { id: 'browser', label: 'My Files', icon: HardDrive, action: () => setCurrentView('browser'), activeFor: ['browser'] },
+        { id: 'documents', label: 'Documents', icon: Folder, action: () => setCurrentView('browser'), activeFor: ['browser'] },
     ];
 
     const toolsItems = [
@@ -33,17 +34,21 @@ export const Sidebar = ({ onOpenSettings }: SidebarProps) => {
         { id: 'chat', label: 'Assistant', icon: MessageSquare, action: () => setCurrentView('chat') },
     ];
 
-    const NavItem = ({ item, isActive }: { item: any; isActive: boolean }) => (
+    type NavItemProps = { item: { id: string; label: string; icon: LucideIcon; action: () => void; activeFor?: string[] }; isActive: boolean };
+
+    const classNames = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
+
+    const NavItem = ({ item, isActive }: NavItemProps) => (
         <button
             onClick={item.action}
             title={collapsed ? item.label : ''}
-            className={`
-                flex items-center w-full p-2 mb-1 rounded-md transition-all duration-200
-                ${isActive 
-                    ? 'bg-surface-active text-primary font-medium border-l-2 border-accent-primary' 
-                    : 'text-secondary hover:bg-surface-hover hover:text-primary border-l-2 border-transparent'}
-                ${collapsed ? 'justify-center px-0 border-l-0' : 'px-3 gap-3'}
-            `}
+            className={classNames(
+                'flex items-center w-full p-2 mb-1 rounded-md transition-all duration-200',
+                isActive
+                    ? 'bg-surface-active text-primary font-medium border-l-2 border-accent-primary'
+                    : 'text-secondary hover:bg-surface-hover hover:text-primary border-l-2 border-transparent',
+                collapsed ? 'justify-center px-0 border-l-0' : 'px-3 gap-3'
+            )}
         >
             <item.icon size={20} className={isActive ? 'text-accent-primary' : ''} />
             {!collapsed && <span>{item.label}</span>}
@@ -95,7 +100,7 @@ export const Sidebar = ({ onOpenSettings }: SidebarProps) => {
                     <ul className="space-y-0.5">
                         {navItems.map(item => (
                             <li key={item.id}>
-                                <NavItem item={item} isActive={currentView === item.id || (item.id === 'browser' && currentView === 'browser')} />
+                                <NavItem item={item} isActive={item.activeFor ? item.activeFor.includes(currentView) : currentView === item.id} />
                             </li>
                         ))}
                     </ul>
@@ -127,16 +132,17 @@ export const Sidebar = ({ onOpenSettings }: SidebarProps) => {
             </div>
 
             {/* Footer / Settings */}
-            <div className="p-3 border-t border-base bg-surface-hover/30">
+            <div className="p-3 border-t border-base" style={{ backgroundColor: 'color-mix(in srgb, var(--bg-hover) 30%, transparent)' }}>
                 <button
                     onClick={() => setCurrentView('trash')}
                     className={`
                         flex items-center w-full p-2 mb-1 rounded-md transition-all duration-200
-                        ${currentView === 'trash' 
-                            ? 'bg-red-50 dark:bg-red-900/20 text-status-error font-medium' 
+                        ${currentView === 'trash'
+                            ? 'text-status-error font-medium'
                             : 'text-secondary hover:bg-surface-hover hover:text-status-error'}
                         ${collapsed ? 'justify-center' : 'px-3 gap-3'}
                     `}
+                    style={currentView === 'trash' ? { backgroundColor: 'color-mix(in srgb, var(--status-error) 12%, transparent)' } : undefined}
                     title={collapsed ? "Trash" : ""}
                 >
                     <Trash2 size={20} />

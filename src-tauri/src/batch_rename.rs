@@ -333,7 +333,10 @@ pub fn batch_rename_preview(
     paths: Vec<String>,
     pattern: &str,
 ) -> Result<Vec<RenamePreview>, String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
+    let db_path = match app.path().app_data_dir() {
+        Ok(dir) => dir.join("filenova.db"),
+        Err(_) => return Err("app data dir unavailable".to_string()),
+    };
     
     // Attempt to connect to DB, but don't fail hard if generic rename allows non-indexed files?
     // User requirement: "Update database". So we assume DB access is desired.
@@ -350,7 +353,10 @@ pub fn batch_rename(
     file_ids: Vec<i64>,
     pattern: &str,
 ) -> Result<Vec<RenamePreview>, String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
+    let db_path = match app.path().app_data_dir() {
+        Ok(dir) => dir.join("filenova.db"),
+        Err(_) => return Err("app data dir unavailable".to_string()),
+    };
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
     let file_metadata_list = build_file_metadata_from_ids(&conn, &file_ids)?;
@@ -365,7 +371,10 @@ pub fn execute_batch_rename(
     renames: Vec<RenameOperation>,
 ) -> Result<String, String> {
     // Returns batch_id
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
+    let db_path = match app.path().app_data_dir() {
+        Ok(dir) => dir.join("filenova.db"),
+        Err(_) => return Err("app data dir unavailable".to_string()),
+    };
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
     let batch_id = uuid::Uuid::new_v4().to_string();

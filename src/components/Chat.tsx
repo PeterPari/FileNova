@@ -1,93 +1,25 @@
 import { useState, useEffect, useRef } from 'react';
 import { Send, User, Bot, FileText, Plus, Menu, MessageSquare, Calendar, File, Image, Film, Music, Archive, Code, FileSpreadsheet, HardDrive, ExternalLink, Check, X, Undo2, Loader2, Ban, CheckCircle2, BarChart3, GitCompare, TrendingUp, FolderOpen, AlertCircle, Search, HelpCircle } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-
-interface ChatFileResult {
-    name: string;
-    path: string;
-    extension: string | null;
-    size_bytes: number;
-    modified_at: number;
-}
-
-interface ChatAction {
-    action_type: string;
-    file_path: string;
-    new_path: string | null;
-    reason: string | null;
-}
-
-interface StatItem {
-    label: string;
-    value: string;
-}
-
-interface TrendPoint {
-    date: string;
-    count: number;
-    size_bytes: number;
-}
-
-interface AnalysisData {
-    title: string;
-    summary: string;
-    stats: StatItem[];
-    trend_data?: TrendPoint[];
-}
-
-interface CompareResults {
-    folder_a: string;
-    folder_b: string;
-    only_in_a: ChatFileResult[];
-    only_in_b: ChatFileResult[];
-    common_count: number;
-    size_a_total: number;
-    size_b_total: number;
-}
-
-interface ChatMetadata {
-    intent: string;
-    params?: any;
-    files?: ChatFileResult[];
-    actions?: ChatAction[];
-    batch_id?: string;
-    action_status?: string;
-    suggestions?: string[];
-    analysis_data?: AnalysisData;
-    compare_results?: CompareResults;
-    error_info?: ChatErrorInfo;
-}
-
-interface ChatErrorInfo {
-    error_type: string;         // "no_results", "search_error", "action_failed", "network_error", "invalid_query"
-    message: string;
-    did_you_mean: string[];     // alternative query suggestions
-}
-
-interface ChatMessage {
-    id: number;
-    session_id: number;
-    role: 'user' | 'assistant';
-    content: string;
-    metadata?: any;
-    metadata_json?: string;
-    created_at: string;
-}
-
-interface ChatSession {
-    id: number;
-    started_at: string;
-    last_message_at: string;
-}
+import { useChatController, type ChatMetadata } from '../hooks/useChatController';
 
 export const Chat = () => {
-    const [sessions, setSessions] = useState<ChatSession[]>([]);
-    const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
-    const [messages, setMessages] = useState<ChatMessage[]>([]);
-    const [input, setInput] = useState('');
-    const [isLoading, setIsLoading] = useState(false);
+    const {
+        sessions,
+        currentSessionId,
+        setCurrentSessionId,
+        messages,
+        input,
+        setInput,
+        isLoading,
+        actionLoading,
+        handleNewChat,
+        handleSend,
+        handleConfirmAction,
+        handleCancelAction,
+        handleUndoAction,
+    } = useChatController();
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-    const [actionLoading, setActionLoading] = useState<number | null>(null); // message id currently executing
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
     const scrollToBottom = () => {
@@ -97,197 +29,6 @@ export const Chat = () => {
     useEffect(() => {
         scrollToBottom();
     }, [messages]);
-
-    useEffect(() => {
-        loadSessions();
-    }, []);
-
-    useEffect(() => {
-        if (currentSessionId) {
-            loadMessages(currentSessionId);
-        } else {
-            setMessages([]);
-        }
-    }, [currentSessionId]);
-
-    const loadSessions = async () => {
-        try {
-            const result = await invoke<ChatSession[]>('get_chat_sessions');
-            setSessions(result);
-            if (result.length > 0 && !currentSessionId) {
-                // Optionally auto-select most recent
-                // setCurrentSessionId(result[0].id);
-            }
-        } catch (error) {
-            console.error("Failed to load sessions:", error);
-        }
-    };
-
-    const loadMessages = async (id: number) => {
-        try {
-            const result = await invoke<ChatMessage[]>('get_chat_messages', { sessionId: id });
-            setMessages(result);
-        } catch (error) {
-            console.error("Failed to load messages:", error);
-        }
-    };
-
-    const handleNewChat = async () => {
-        try {
-            const newId = await invoke<number>('create_chat_session');
-            await loadSessions();
-            setCurrentSessionId(newId);
-        } catch (error) {
-            console.error("Failed to create session:", error);
-        }
-    };
-
-    const handleSend = async () => {
-        if (!input.trim()) return;
-
-        let sessionId = currentSessionId;
-        if (!sessionId) {
-            try {
-                sessionId = await invoke<number>('create_chat_session');
-                setCurrentSessionId(sessionId);
-                await loadSessions(); 
-            } catch (error) {
-                console.error("Failed to create session:", error);
-                return;
-            }
-        }
-
-        const tempUserMsg: ChatMessage = {
-            id: Date.now(),
-            session_id: sessionId!,
-            role: 'user',
-            content: input,
-            created_at: new Date().toISOString()
-        };
-
-        setMessages(prev => [...prev, tempUserMsg]);
-        setInput('');
-        setIsLoading(true);
-
-        try {
-            const response = await invoke<{ message: ChatMessage }>('chat_query', { 
-                sessionId, 
-                message: tempUserMsg.content 
-            });
-            
-            setMessages(prev => [...prev, response.message]);
-            loadSessions(); // refresh timestamps
-        } catch (error) {
-            console.error("Chat query failed:", error);
-            const errorStr = String(error);
-            let friendlyMsg = "⚠️ Something went wrong. Please try again.";
-            if (errorStr.includes("API key") || errorStr.includes("api_key")) {
-                friendlyMsg = "⚠️ Please set your AI API key in Settings to use the assistant.";
-            } else if (errorStr.includes("network") || errorStr.includes("Network")) {
-                friendlyMsg = "⚠️ Network error — please check your internet connection.";
-            }
-            setMessages(prev => [...prev, {
-                id: Date.now() + 1,
-                session_id: sessionId!,
-                role: 'assistant',
-                content: friendlyMsg,
-                created_at: new Date().toISOString()
-            }]);
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    const handleConfirmAction = async (msg: ChatMessage) => {
-        if (!currentSessionId) return;
-        setActionLoading(msg.id);
-        try {
-            const response = await invoke<{ message: ChatMessage }>('chat_execute_action', {
-                messageId: msg.id,
-                sessionId: currentSessionId
-            });
-            // Update the original message's metadata to "confirmed" status locally
-            setMessages(prev => prev.map(m => {
-                if (m.id === msg.id && m.metadata_json) {
-                    try {
-                        const meta = JSON.parse(m.metadata_json);
-                        meta.action_status = 'confirmed';
-                        return { ...m, metadata_json: JSON.stringify(meta) };
-                    } catch { return m; }
-                }
-                return m;
-            }));
-            // Add the confirmation response message
-            setMessages(prev => [...prev, response.message]);
-        } catch (error) {
-            console.error("Action execution failed:", error);
-            setMessages(prev => [...prev, {
-                id: Date.now() + 1,
-                session_id: currentSessionId!,
-                role: 'assistant',
-                content: `❌ Failed to execute action: ${error}`,
-                created_at: new Date().toISOString()
-            }]);
-        } finally {
-            setActionLoading(null);
-        }
-    };
-
-    const handleCancelAction = (msg: ChatMessage) => {
-        // Update the message metadata locally to mark as cancelled
-        setMessages(prev => prev.map(m => {
-            if (m.id === msg.id && m.metadata_json) {
-                try {
-                    const meta = JSON.parse(m.metadata_json);
-                    meta.action_status = 'cancelled';
-                    return { ...m, metadata_json: JSON.stringify(meta) };
-                } catch { return m; }
-            }
-            return m;
-        }));
-        // Add a cancellation message
-        setMessages(prev => [...prev, {
-            id: Date.now(),
-            session_id: currentSessionId!,
-            role: 'assistant',
-            content: '🚫 Action cancelled. No changes were made.',
-            created_at: new Date().toISOString()
-        }]);
-    };
-
-    const handleUndoAction = async (batchId: string) => {
-        if (!currentSessionId) return;
-        setActionLoading(-1); // generic loading
-        try {
-            const response = await invoke<{ message: ChatMessage }>('chat_undo_action', {
-                batchId,
-                sessionId: currentSessionId
-            });
-            // Update all messages with this batch_id to "undone"
-            setMessages(prev => prev.map(m => {
-                if (m.metadata_json?.includes(batchId)) {
-                    try {
-                        const meta = JSON.parse(m.metadata_json);
-                        meta.action_status = 'undone';
-                        return { ...m, metadata_json: JSON.stringify(meta) };
-                    } catch { return m; }
-                }
-                return m;
-            }));
-            setMessages(prev => [...prev, response.message]);
-        } catch (error) {
-            console.error("Undo failed:", error);
-            setMessages(prev => [...prev, {
-                id: Date.now() + 1,
-                session_id: currentSessionId!,
-                role: 'assistant',
-                content: `❌ Undo failed: ${error}`,
-                created_at: new Date().toISOString()
-            }]);
-        } finally {
-            setActionLoading(null);
-        }
-    };
 
     const formatDate = (dateString: string) => {
         const date = new Date(dateString);
@@ -308,7 +49,7 @@ export const Chat = () => {
     };
 
     const getFileIcon = (ext: string | null) => {
-        if (!ext) return <File size={18} className="text-gray-400" />;
+        if (!ext) return <File size={18} className="text-muted" />;
         const e = ext.toLowerCase().replace('.', '');
         if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(e))
             return <Image size={18} className="text-pink-500" />;
@@ -324,7 +65,7 @@ export const Chat = () => {
             return <FileSpreadsheet size={18} className="text-green-600" />;
         if (['pdf', 'doc', 'docx', 'txt', 'md', 'rtf'].includes(e))
             return <FileText size={18} className="text-red-500" />;
-        return <File size={18} className="text-gray-400" />;
+        return <File size={18} className="text-muted" />;
     };
 
     const parseMetadata = (metadataJson?: string): ChatMetadata | null => {
@@ -337,12 +78,12 @@ export const Chat = () => {
     };
 
     return (
-        <div className="flex h-full bg-white dark:bg-gray-900 overflow-hidden">
+        <div className="flex h-full bg-base overflow-hidden">
              {/* Sidebar */}
-             <div className={`${isSidebarOpen ? 'w-64' : 'w-0'} bg-gray-50 dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 transition-all duration-300 flex flex-col overflow-hidden`}>
-                <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
-                    <h2 className="font-semibold text-gray-700 dark:text-gray-200">History</h2>
-                    <button onClick={handleNewChat} className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full" title="New Chat">
+             <div className={`${isSidebarOpen ? 'w-64' : 'w-0'} bg-surface border-r border-base transition-all duration-300 flex flex-col overflow-hidden`}>
+                <div className="p-4 border-b border-base flex justify-between items-center">
+                    <h2 className="font-semibold text-primary">History</h2>
+                    <button onClick={handleNewChat} className="p-1 hover:bg-surface-hover rounded-full" title="New Chat">
                         <Plus size={18} />
                     </button>
                 </div>
@@ -353,22 +94,22 @@ export const Chat = () => {
                             onClick={() => setCurrentSessionId(session.id)}
                             className={`w-full text-left p-3 rounded-lg text-sm flex flex-col gap-1 ${
                                 currentSessionId === session.id 
-                                    ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' 
-                                    : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300'
+                                    ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+                                    : 'hover:bg-surface-hover text-secondary'
                             }`}
                         >
                             <div className="flex items-center gap-2">
                                 <MessageSquare size={14} />
                                 <span className="font-medium truncate">Session #{session.id}</span>
                             </div>
-                            <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                            <div className="flex items-center gap-2 text-xs text-muted">
                                 <Calendar size={10} />
                                 <span>{formatDate(session.last_message_at)}</span>
                             </div>
                         </button>
                     ))}
                     {sessions.length === 0 && (
-                        <div className="text-center p-4 text-gray-400 text-sm">
+                        <div className="text-center p-4 text-muted text-sm">
                             No history yet
                         </div>
                     )}
@@ -378,15 +119,15 @@ export const Chat = () => {
             {/* Main Chat Area */}
             <div className="flex-1 flex flex-col h-full min-w-0">
                 {/* Header */}
-                <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-white dark:bg-gray-900 z-10">
+                <div className="p-4 border-b border-base flex justify-between items-center bg-base z-10">
                     <div className="flex items-center gap-3">
                         <button 
                             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                            className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-300 rounded transition-colors"
+                            className="p-1 hover:bg-surface-hover text-secondary rounded transition-colors"
                         >
                             <Menu size={20} />
                         </button>
-                        <h1 className="text-xl font-bold flex items-center gap-2 dark:text-gray-100">
+                        <h1 className="text-xl font-bold flex items-center gap-2 text-primary">
                             <Bot className="text-blue-500" />
                             Smart Assistant
                         </h1>
@@ -396,7 +137,7 @@ export const Chat = () => {
                 {/* Messages */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
                     {!currentSessionId && messages.length === 0 && (
-                         <div className="flex flex-col items-center justify-center h-full text-gray-400 space-y-4">
+                         <div className="flex flex-col items-center justify-center h-full text-muted space-y-4">
                             <Bot size={64} className="opacity-20" />
                             <p className="text-lg">How can I help you organize your files today?</p>
                             <div className="grid grid-cols-2 gap-2 max-w-lg w-full">
@@ -404,7 +145,7 @@ export const Chat = () => {
                                     <button 
                                         key={suggestion}
                                         onClick={() => setInput(suggestion)}
-                                        className="p-3 text-sm border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-left dark:text-gray-300"
+                                        className="p-3 text-sm border border-base rounded-lg hover:bg-surface-hover transition-colors text-left text-secondary"
                                     >
                                         {suggestion}
                                     </button>
@@ -419,14 +160,14 @@ export const Chat = () => {
                             className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                         >
                              <div className={`flex max-w-[80%] ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'} gap-3`}>
-                                <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${msg.role === 'user' ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-700'}`}>
-                                    {msg.role === 'user' ? <User size={16} className="text-white" /> : <Bot size={16} className="text-gray-600 dark:text-gray-300" />}
+                                <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${msg.role === 'user' ? 'bg-accent-primary' : 'bg-surface-active'}`}>
+                                    {msg.role === 'user' ? <User size={16} className="text-white" /> : <Bot size={16} className="text-secondary" />}
                                 </div>
                                 
                                 <div className={`p-4 rounded-2xl ${
-                                    msg.role === 'user' 
-                                        ? 'bg-blue-500 text-white rounded-tr-none' 
-                                        : 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200 rounded-tl-none border border-gray-200 dark:border-gray-700'
+                                    msg.role === 'user'
+                                        ? 'bg-accent-primary text-white rounded-tr-none'
+                                        : 'bg-surface text-primary rounded-tl-none border border-base'
                                 }`}>
                                     <p className="whitespace-pre-wrap">{msg.content}</p>
 
@@ -453,13 +194,13 @@ export const Chat = () => {
                                                 </div>
                                                 {err.did_you_mean.length > 0 && (
                                                     <div className="mt-2">
-                                                        <p className="text-xs text-gray-500 dark:text-gray-400 mb-1.5">Did you mean:</p>
+                                                        <p className="text-xs text-muted mb-1.5">Did you mean:</p>
                                                         <div className="flex flex-wrap gap-1.5">
                                                             {err.did_you_mean.map((s, idx) => (
                                                                 <button
                                                                     key={idx}
                                                                     onClick={() => setInput(s.replace(/^Did you mean '(.+)'\?$/, '$1').replace(/^Search for /, ''))}
-                                                                    className="px-2.5 py-1 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-full hover:border-blue-400 dark:hover:border-blue-500 hover:text-blue-600 dark:hover:text-blue-400 transition-colors cursor-pointer"
+                                                                    className="px-2.5 py-1 text-xs bg-base border border-base rounded-full hover:border-blue-400 dark:hover:border-blue-500 hover:text-accent-primary transition-colors cursor-pointer"
                                                                 >
                                                                     {s}
                                                                 </button>
@@ -486,7 +227,7 @@ export const Chat = () => {
                                                     {meta.files.map((file, idx) => (
                                                         <div 
                                                             key={idx}
-                                                            className="flex items-center gap-3 p-2.5 rounded-lg bg-white/80 dark:bg-gray-900/60 border border-gray-200 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500 transition-colors cursor-pointer group"
+                                                            className="flex items-center gap-3 p-2.5 rounded-lg bg-base/80 border border-base hover:border-blue-400 dark:hover:border-blue-500 transition-colors cursor-pointer group"
                                                             title={file.path}
                                                             onClick={() => {
                                                                 // Navigate to file in file browser
@@ -497,26 +238,26 @@ export const Chat = () => {
                                                             }}
                                                         >
                                                             {/* File type icon */}
-                                                            <div className="w-9 h-9 rounded-lg bg-gray-100 dark:bg-gray-700 flex items-center justify-center shrink-0">
+                                                            <div className="w-9 h-9 rounded-lg bg-surface-hover flex items-center justify-center shrink-0">
                                                                 {getFileIcon(file.extension)}
                                                             </div>
                                                             
                                                             {/* File info */}
                                                             <div className="flex-1 min-w-0">
-                                                                <div className="font-medium text-sm truncate text-gray-900 dark:text-gray-100">
+                                                                <div className="font-medium text-sm truncate text-primary">
                                                                     {file.name}
                                                                 </div>
-                                                                <div className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                                                                <div className="flex items-center gap-3 text-xs text-muted mt-0.5">
                                                                     <span>{formatFileSize(file.size_bytes)}</span>
                                                                     {file.modified_at > 0 && (
                                                                         <>
-                                                                            <span className="text-gray-300 dark:text-gray-600">·</span>
+                                                                            <span className="text-disabled">·</span>
                                                                             <span>{formatTimestamp(file.modified_at)}</span>
                                                                         </>
                                                                     )}
                                                                     {file.extension && (
                                                                         <>
-                                                                            <span className="text-gray-300 dark:text-gray-600">·</span>
+                                                                            <span className="text-disabled">·</span>
                                                                             <span className="uppercase">{file.extension.replace('.', '')}</span>
                                                                         </>
                                                                     )}
@@ -524,7 +265,7 @@ export const Chat = () => {
                                                             </div>
 
                                                             {/* Hover action */}
-                                                            <ExternalLink size={14} className="text-gray-300 dark:text-gray-600 group-hover:text-blue-500 transition-colors shrink-0" />
+                                                            <ExternalLink size={14} className="text-disabled group-hover:text-accent-primary transition-colors shrink-0" />
                                                         </div>
                                                     ))}
                                                 </div>
@@ -552,9 +293,9 @@ export const Chat = () => {
                                                     {ad.stats.length > 0 && (
                                                         <div className="grid grid-cols-2 gap-2">
                                                             {ad.stats.map((stat, idx) => (
-                                                                <div key={idx} className="p-2.5 rounded-lg bg-white/80 dark:bg-gray-900/60 border border-gray-200 dark:border-gray-600">
-                                                                    <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{stat.label}</div>
-                                                                    <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 mt-0.5 truncate">{stat.value}</div>
+                                                                <div key={idx} className="p-2.5 rounded-lg bg-base/80 border border-base">
+                                                                    <div className="text-xs text-muted truncate">{stat.label}</div>
+                                                                    <div className="text-sm font-semibold text-primary mt-0.5 truncate">{stat.value}</div>
                                                                 </div>
                                                             ))}
                                                         </div>
@@ -567,7 +308,7 @@ export const Chat = () => {
                                                                 <TrendingUp size={12} />
                                                                 Activity Timeline
                                                             </div>
-                                                            <div className="flex items-end gap-px h-24 p-2 rounded-lg bg-white/80 dark:bg-gray-900/60 border border-gray-200 dark:border-gray-600">
+                                                            <div className="flex items-end gap-px h-24 p-2 rounded-lg bg-base/80 border border-base">
                                                                 {(() => {
                                                                     const maxCount = Math.max(...ad.trend_data!.map(t => t.count), 1);
                                                                     return ad.trend_data!.map((point, idx) => (
@@ -584,7 +325,7 @@ export const Chat = () => {
                                                                     ));
                                                                 })()}
                                                             </div>
-                                                            <div className="flex justify-between text-[10px] text-gray-400">
+                                                            <div className="flex justify-between text-[10px] text-muted">
                                                                 <span>{ad.trend_data[0].date}</span>
                                                                 <span>{ad.trend_data[ad.trend_data.length - 1].date}</span>
                                                             </div>
@@ -606,8 +347,8 @@ export const Chat = () => {
 
                                                     {/* Summary Cards */}
                                                     <div className="grid grid-cols-2 gap-2">
-                                                        <div className="p-2.5 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
-                                                            <div className="flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400">
+                                                        <div className="p-2.5 rounded-lg border border-blue-200 dark:border-blue-800" style={{ backgroundColor: 'color-mix(in srgb, var(--accent-blue) 12%, transparent)' }}>
+                                                            <div className="flex items-center gap-1.5 text-xs text-accent-primary">
                                                                 <FolderOpen size={12} />
                                                                 {cr.folder_a}
                                                             </div>
@@ -615,7 +356,7 @@ export const Chat = () => {
                                                                 {formatFileSize(cr.size_a_total)}
                                                             </div>
                                                         </div>
-                                                        <div className="p-2.5 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800">
+                                                        <div className="p-2.5 rounded-lg border border-purple-200 dark:border-purple-800" style={{ backgroundColor: 'color-mix(in srgb, var(--accent-purple, #8b5cf6) 12%, transparent)' }}>
                                                             <div className="flex items-center gap-1.5 text-xs text-purple-600 dark:text-purple-400">
                                                                 <FolderOpen size={12} />
                                                                 {cr.folder_b}
@@ -631,7 +372,7 @@ export const Chat = () => {
                                                         <span className="px-2 py-1 rounded bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800">
                                                             {cr.common_count} common
                                                         </span>
-                                                        <span className="px-2 py-1 rounded bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800">
+                                                        <span className="px-2 py-1 rounded border border-blue-200 dark:border-blue-800 text-accent-primary" style={{ backgroundColor: 'color-mix(in srgb, var(--accent-blue) 12%, transparent)' }}>
                                                             {cr.only_in_a.length} unique to {cr.folder_a}
                                                         </span>
                                                         <span className="px-2 py-1 rounded bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-400 border border-purple-200 dark:border-purple-800">
@@ -642,19 +383,19 @@ export const Chat = () => {
                                                     {/* Unique files lists */}
                                                     {cr.only_in_a.length > 0 && (
                                                         <div>
-                                                            <div className="text-xs font-semibold text-blue-600 dark:text-blue-400 mb-1">
+                                                            <div className="text-xs font-semibold text-accent-primary mb-1">
                                                                 Only in {cr.folder_a}:
                                                             </div>
                                                             <div className="space-y-1 max-h-32 overflow-y-auto">
                                                                 {cr.only_in_a.slice(0, 10).map((f, idx) => (
-                                                                    <div key={idx} className="flex items-center gap-2 text-xs p-1.5 rounded bg-white/50 dark:bg-gray-900/40">
+                                                                    <div key={idx} className="flex items-center gap-2 text-xs p-1.5 rounded bg-base/50">
                                                                         {getFileIcon(f.extension)}
                                                                         <span className="truncate flex-1">{f.name}</span>
-                                                                        <span className="text-gray-400 shrink-0">{formatFileSize(f.size_bytes)}</span>
+                                                                        <span className="text-muted shrink-0">{formatFileSize(f.size_bytes)}</span>
                                                                     </div>
                                                                 ))}
                                                                 {cr.only_in_a.length > 10 && (
-                                                                    <div className="text-xs text-gray-400 text-center">...and {cr.only_in_a.length - 10} more</div>
+                                                                    <div className="text-xs text-muted text-center">...and {cr.only_in_a.length - 10} more</div>
                                                                 )}
                                                             </div>
                                                         </div>
@@ -666,14 +407,14 @@ export const Chat = () => {
                                                             </div>
                                                             <div className="space-y-1 max-h-32 overflow-y-auto">
                                                                 {cr.only_in_b.slice(0, 10).map((f, idx) => (
-                                                                    <div key={idx} className="flex items-center gap-2 text-xs p-1.5 rounded bg-white/50 dark:bg-gray-900/40">
+                                                                    <div key={idx} className="flex items-center gap-2 text-xs p-1.5 rounded bg-base/50">
                                                                         {getFileIcon(f.extension)}
                                                                         <span className="truncate flex-1">{f.name}</span>
-                                                                        <span className="text-gray-400 shrink-0">{formatFileSize(f.size_bytes)}</span>
+                                                                        <span className="text-muted shrink-0">{formatFileSize(f.size_bytes)}</span>
                                                                     </div>
                                                                 ))}
                                                                 {cr.only_in_b.length > 10 && (
-                                                                    <div className="text-xs text-gray-400 text-center">...and {cr.only_in_b.length - 10} more</div>
+                                                                    <div className="text-xs text-muted text-center">...and {cr.only_in_b.length - 10} more</div>
                                                                 )}
                                                             </div>
                                                         </div>
@@ -695,7 +436,7 @@ export const Chat = () => {
                                         // Pending actions — show Confirm + Cancel
                                         if (status === 'pending' && meta.actions && meta.actions.length > 0) {
                                             return (
-                                                <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
+                                                <div className="mt-3 pt-3 border-t border-base">
                                                     <div className="flex items-center gap-2">
                                                         <button
                                                             onClick={() => handleConfirmAction(msg)}
@@ -708,13 +449,13 @@ export const Chat = () => {
                                                         <button
                                                             onClick={() => handleCancelAction(msg)}
                                                             disabled={isExecuting}
-                                                            className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 disabled:opacity-50 text-gray-700 dark:text-gray-200 text-sm font-medium rounded-lg transition-colors"
+                                                            className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-active hover:bg-surface-hover disabled:opacity-50 text-primary text-sm font-medium rounded-lg transition-colors"
                                                         >
                                                             <X size={14} />
                                                             Cancel
                                                         </button>
                                                     </div>
-                                                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1.5">
+                                                    <p className="text-xs text-muted mt-1.5">
                                                         {meta.actions.length} action{meta.actions.length !== 1 ? 's' : ''} waiting for confirmation
                                                     </p>
                                                 </div>
@@ -724,7 +465,7 @@ export const Chat = () => {
                                         // Confirmed — show Undo button
                                         if (status === 'confirmed' && meta.batch_id) {
                                             return (
-                                                <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
+                                                <div className="mt-3 pt-3 border-t border-base">
                                                     <div className="flex items-center gap-2">
                                                         <span className="flex items-center gap-1.5 text-green-600 dark:text-green-400 text-sm font-medium">
                                                             <CheckCircle2 size={14} />
@@ -746,8 +487,8 @@ export const Chat = () => {
                                         // Cancelled
                                         if (status === 'cancelled') {
                                             return (
-                                                <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
-                                                    <span className="flex items-center gap-1.5 text-gray-500 text-sm">
+                                                <div className="mt-3 pt-3 border-t border-base">
+                                                    <span className="flex items-center gap-1.5 text-muted text-sm">
                                                         <Ban size={14} />
                                                         Cancelled
                                                     </span>
@@ -758,7 +499,7 @@ export const Chat = () => {
                                         // Undone
                                         if (status === 'undone') {
                                             return (
-                                                <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
+                                                <div className="mt-3 pt-3 border-t border-base">
                                                     <span className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 text-sm">
                                                         <Undo2 size={14} />
                                                         Undone — changes reverted
@@ -776,14 +517,15 @@ export const Chat = () => {
                                         if (!meta?.suggestions || meta.suggestions.length === 0) return null;
 
                                         return (
-                                            <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
-                                                <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Try next:</p>
+                                            <div className="mt-3 pt-3 border-t border-base">
+                                                <p className="text-xs text-muted mb-2">Try next:</p>
                                                 <div className="flex flex-wrap gap-1.5">
                                                     {meta.suggestions.map((s, idx) => (
                                                         <button
                                                             key={idx}
                                                             onClick={() => setInput(s)}
-                                                            className="px-2.5 py-1 text-xs bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800 rounded-full hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors"
+                                                            className="px-2.5 py-1 text-xs text-accent-primary border border-blue-200 dark:border-blue-800 rounded-full hover:opacity-80 transition-colors"
+                                                            style={{ backgroundColor: 'color-mix(in srgb, var(--accent-blue) 12%, transparent)' }}
                                                         >
                                                             {s}
                                                         </button>
@@ -799,11 +541,11 @@ export const Chat = () => {
                     {isLoading && (
                         <div className="flex justify-start w-full">
                             <div className="flex flex-row gap-3">
-                                <div className="w-8 h-8 rounded-full bg-gray-300 dark:bg-gray-700 flex items-center justify-center shrink-0">
-                                    <Bot size={16} className="text-gray-600 dark:text-gray-300" />
+                                <div className="w-8 h-8 rounded-full bg-surface-active flex items-center justify-center shrink-0">
+                                    <Bot size={16} className="text-secondary" />
                                 </div>
-                                <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded-2xl rounded-tl-none border border-gray-200 dark:border-gray-700">
-                                    <span className="animate-pulse dark:text-gray-300">Thinking...</span>
+                                <div className="bg-surface p-4 rounded-2xl rounded-tl-none border border-base">
+                                    <span className="animate-pulse text-secondary">Thinking...</span>
                                 </div>
                             </div>
                         </div>
@@ -812,7 +554,7 @@ export const Chat = () => {
                 </div>
 
                 {/* Input Area */}
-                <div className="p-4 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700">
+                <div className="p-4 bg-base border-t border-base">
                     <div className="flex gap-2">
                         <input
                             type="text"
@@ -820,7 +562,7 @@ export const Chat = () => {
                             onChange={(e) => setInput(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
                             placeholder="Ask me to search, analyze, or organize..."
-                            className="flex-1 p-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white"
+                            className="flex-1 p-3 border border-base rounded-lg bg-surface focus:outline-none focus:ring-2 focus:ring-blue-500 text-primary"
                             disabled={isLoading}
                         />
                         <button 

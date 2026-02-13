@@ -1,13 +1,16 @@
-import { useState, useEffect } from 'react';
-import { useFileStore, ExtractionStats, AiStatus } from '../store/fileStore';
+import { useState } from 'react';
+import { useFileStore } from '../store/fileStore';
 import { X, Plus, Trash2, Folder, CheckCircle, XCircle, Loader2, Settings, Database, Cpu, ListTree, Palette, Activity } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { RulesManager } from './RulesManager';
 import { TrashManager } from './TrashManager';
 import { ThemeSettings } from './ThemeSettings';
 import { DiagnosticsPanel } from './DiagnosticsPanel';
 import { resetFeatureDiscovery } from './FeatureDiscovery';
+import { useSettingsData } from '../hooks/useSettingsData';
 
 type Tab = 'general' | 'indexing' | 'ai' | 'appearance' | 'diagnostics' | 'rules' | 'trash';
 
@@ -15,62 +18,30 @@ export const SettingsModal = ({ onClose }: { onClose: () => void }) => {
     const { settings, addIndexedPath, removeIndexedPath, startIndexing, startContentExtraction } = useFileStore();
     const [activeTab, setActiveTab] = useState<Tab>('general');
     const [pathInput, setPathInput] = useState('');
+    const {
+        state,
+        setField,
+        saveAiSettings,
+        saveRetention,
+        toggleCrashReporting,
+        checkConnection,
+    } = useSettingsData();
 
-    // AI settings
-    const [aiProvider, setAiProvider] = useState('ollama');
-    const [providerUrl, setProviderUrl] = useState('http://localhost:11434');
-    const [openaiApiKey, setOpenaiApiKey] = useState('');
-    const [modelName, setModelName] = useState('nomic-embed-text');
-    const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
-    const [checkingAi, setCheckingAi] = useState(false);
-    const [extractionStats, setExtractionStats] = useState<ExtractionStats | null>(null);
-    const [trashRetention, setTrashRetention] = useState(30);
-    const [crashReporting, setCrashReporting] = useState(false);
-
-    useEffect(() => {
-        // Load saved AI settings
-        const loadSettings = async () => {
-            try {
-                const provider = await invoke<string | null>('get_app_setting', { key: 'ai_provider' });
-                if (provider) setAiProvider(provider);
-
-                const url = await invoke<string | null>('get_app_setting', { key: 'ollama_url' });
-                if (url) {
-                    setProviderUrl(url);
-                } else {
-                    const legacyUrl = await invoke<string | null>('get_app_setting', { key: 'ai_provider_url' });
-                    if (legacyUrl) setProviderUrl(legacyUrl);
-                }
-
-                const key = await invoke<string | null>('get_app_setting', { key: 'openai_api_key' });
-                if (key) setOpenaiApiKey(key);
-
-                const tagModel = await invoke<string | null>('get_app_setting', { key: 'ai_tag_model' });
-                if (tagModel) {
-                    setModelName(tagModel);
-                } else {
-                    const model = await invoke<string | null>('get_app_setting', { key: 'ai_embedding_model' });
-                    if (model) setModelName(model);
-                }
-
-                const retention = await invoke<string | null>('get_app_setting', { key: 'trash_retention_days' });
-                if (retention) setTrashRetention(parseInt(retention));
-
-                const crashOpt = await invoke<string | null>('get_app_setting', { key: 'crash_reporting_enabled' });
-                setCrashReporting(crashOpt === 'true');
-            } catch { /* use defaults */ }
-
-            // Load extraction stats
-            try {
-                const stats = await invoke<ExtractionStats>('get_extraction_stats');
-                setExtractionStats(stats);
-            } catch { /* ignore */ }
-        };
-        loadSettings();
-    }, []);
+    const {
+        aiProvider,
+        providerUrl,
+        openaiApiKey,
+        geminiApiKey,
+        modelName,
+        aiStatus,
+        checkingAi,
+        extractionStats,
+        trashRetention,
+        crashReporting,
+    } = state;
 
     const handleSaveRetention = async () => {
-        await invoke('save_app_setting', { key: 'trash_retention_days', value: trashRetention.toString() });
+        await saveRetention();
     };
 
     const handleAddPath = () => {
@@ -87,43 +58,21 @@ export const SettingsModal = ({ onClose }: { onClose: () => void }) => {
         }
     };
 
-    const handleSaveAiSettings = async () => {
-        await invoke('save_app_setting', { key: 'ai_provider', value: aiProvider });
-        await invoke('save_app_setting', { key: 'ollama_url', value: providerUrl });
-        await invoke('save_app_setting', { key: 'openai_api_key', value: openaiApiKey });
-        await invoke('save_app_setting', { key: 'ai_embedding_model', value: modelName });
-        await invoke('save_app_setting', { key: 'ai_tag_model', value: modelName });
-    };
-
     const handleCheckConnection = async () => {
-        setCheckingAi(true);
-        setAiStatus(null);
-        await handleSaveAiSettings();
-        try {
-            const status = await invoke<AiStatus>('check_ai_status');
-            setAiStatus(status);
-        } catch (err) {
-            setAiStatus({
-                ollama_running: false,
-                model_available: false,
-                model_name: modelName,
-                provider_url: providerUrl,
-            });
-        }
-        setCheckingAi(false);
+        await checkConnection();
     };
 
     const handleStartExtraction = async () => {
-        await handleSaveAiSettings();
+        await saveAiSettings();
         startContentExtraction();
     };
 
-    const TabButton = ({ id, label, icon: Icon }: { id: Tab, label: string, icon: any }) => (
+    const TabButton = ({ id, label, icon: Icon }: { id: Tab, label: string, icon: LucideIcon }) => (
         <button
             onClick={() => setActiveTab(id)}
-            className={`flex items-center gap-2 px-4 py-2 w-full text-left rounded-md transition-colors ${activeTab === id
-                ? 'bg-blue-600 text-white'
-                : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+            className={`flex items-center gap-2 px-4 py-2 w-full text-left rounded-md transition-theme ${activeTab === id
+                ? 'bg-accent-primary text-white'
+                : 'text-muted hover:bg-surface-hover hover:text-primary'
                 }`}
         >
             <Icon size={18} />
@@ -133,9 +82,9 @@ export const SettingsModal = ({ onClose }: { onClose: () => void }) => {
 
     return (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 backdrop-blur-sm">
-            <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-[900px] h-[600px] max-w-full flex overflow-hidden">
+            <div className="bg-base rounded-lg w-[900px] h-[600px] max-w-full flex overflow-hidden" style={{ boxShadow: 'var(--shadow-xl)' }}>
                 {/* Sidebar */}
-                <div className="w-64 bg-gray-50 dark:bg-gray-800 p-4 border-r border-gray-200 dark:border-gray-700 flex flex-col">
+                <div className="w-64 bg-surface p-4 border-r border-base flex flex-col">
                     <h2 className="font-bold text-xl mb-6 px-4">Settings</h2>
                     <nav className="space-y-1 flex-1">
                         <TabButton id="general" label="General" icon={Settings} />
@@ -146,44 +95,44 @@ export const SettingsModal = ({ onClose }: { onClose: () => void }) => {
                         <TabButton id="trash" label="Trash Bin" icon={Trash2} />
                         <TabButton id="diagnostics" label="Diagnostics" icon={Activity} />
                     </nav>
-                    <button onClick={onClose} className="mt-auto flex items-center gap-2 px-4 py-2 text-gray-500 hover:text-white transition-colors">
+                    <button onClick={onClose} className="mt-auto flex items-center gap-2 px-4 py-2 text-muted hover:text-primary transition-theme">
                         <X size={18} /> Close
                     </button>
                 </div>
 
                 {/* Content */}
-                <div className="flex-1 overflow-y-auto p-8 bg-gray-900">
+                <div className="flex-1 overflow-y-auto p-8 bg-base">
                     {activeTab === 'general' && (
                         <div className="space-y-6">
-                            <h3 className="text-lg font-medium border-b border-gray-700 pb-2">General Settings</h3>
+                            <h3 className="text-lg font-medium border-b border-base pb-2">General Settings</h3>
                             <div>
-                                <label className="block text-sm text-gray-400 mb-1">Trash Retention (Days)</label>
+                                <label className="block text-sm text-muted mb-1">Trash Retention (Days)</label>
                                 <input
                                     type="number"
                                     min="1"
                                     max="365"
                                     value={trashRetention}
-                                    onChange={(e) => setTrashRetention(parseInt(e.target.value) || 30)}
+                                    onChange={(e) => setField('trashRetention', parseInt(e.target.value) || 30)}
                                     onBlur={() => handleSaveRetention()}
-                                    className="w-full max-w-xs px-3 py-2 border border-gray-600 rounded bg-gray-800 text-white text-sm"
+                                    className="w-full max-w-xs px-3 py-2 border border-base rounded bg-surface text-primary text-sm"
                                 />
-                                <p className="text-xs text-gray-500 mt-1">Files in FileNova Trash older than this are permanently deleted.</p>
+                                <p className="text-xs text-muted mt-1">Files in FileNova Trash older than this are permanently deleted.</p>
                             </div>
                             <div>
-                                <label className="block text-sm text-gray-400 mb-1">Feature Discovery</label>
+                                <label className="block text-sm text-muted mb-1">Feature Discovery</label>
                                 <button
                                     onClick={() => {
                                         resetFeatureDiscovery();
                                         alert('Feature tips have been reset. They will appear again on next load.');
                                     }}
-                                    className="px-3 py-2 border border-gray-600 rounded bg-gray-800 text-white text-sm hover:bg-gray-700 transition-colors"
+                                    className="px-3 py-2 border border-base rounded bg-surface text-primary text-sm hover:bg-surface-hover transition-theme"
                                 >
                                     Reset Feature Tips
                                 </button>
-                                <p className="text-xs text-gray-500 mt-1">Show dismissed feature discovery tooltips again.</p>
+                                <p className="text-xs text-muted mt-1">Show dismissed feature discovery tooltips again.</p>
                             </div>
                             <div>
-                                <label className="block text-sm text-gray-400 mb-1">Sample Data</label>
+                                <label className="block text-sm text-muted mb-1">Sample Data</label>
                                 <div className="flex gap-2">
                                     <button
                                         onClick={async () => {
@@ -194,7 +143,7 @@ export const SettingsModal = ({ onClose }: { onClose: () => void }) => {
                                                 alert(String(e));
                                             }
                                         }}
-                                        className="px-3 py-2 border border-gray-600 rounded bg-gray-800 text-white text-sm hover:bg-gray-700 transition-colors"
+                                        className="px-3 py-2 border border-base rounded bg-surface text-primary text-sm hover:bg-surface-hover transition-theme"
                                     >
                                         Generate Sample Data
                                     </button>
@@ -207,17 +156,17 @@ export const SettingsModal = ({ onClose }: { onClose: () => void }) => {
                                                 alert(String(e));
                                             }
                                         }}
-                                        className="px-3 py-2 border border-red-800 rounded bg-gray-800 text-red-400 text-sm hover:bg-red-900/30 transition-colors"
+                                        className="px-3 py-2 border border-red-800 rounded bg-surface text-red-400 text-sm hover:bg-red-900/30 transition-theme"
                                     >
                                         Remove Sample Data
                                     </button>
                                 </div>
-                                <p className="text-xs text-gray-500 mt-1">Create a demo folder with sample files to explore FileNova features.</p>
+                                <p className="text-xs text-muted mt-1">Create a demo folder with sample files to explore FileNova features.</p>
                             </div>
 
                             {/* Updates */}
                             <div>
-                                <label className="block text-sm font-medium text-gray-300 mb-2">Software Updates</label>
+                                <label className="block text-sm font-medium text-secondary mb-2">Software Updates</label>
                                 <button
                                     onClick={async () => {
                                         try {
@@ -239,24 +188,23 @@ export const SettingsModal = ({ onClose }: { onClose: () => void }) => {
                                             alert(`Update check failed: ${String(e)}`);
                                         }
                                     }}
-                                    className="px-3 py-2 border border-gray-600 rounded bg-gray-800 text-white text-sm hover:bg-gray-700 transition-colors"
+                                    className="px-3 py-2 border border-base rounded bg-surface text-primary text-sm hover:bg-surface-hover transition-theme"
                                 >
                                     Check for Updates
                                 </button>
-                                <p className="text-xs text-gray-500 mt-1">Current version: v1.0.0</p>
+                                <p className="text-xs text-muted mt-1">Current version: v1.0.0</p>
                             </div>
 
                             {/* Crash Reporting */}
                             <div>
-                                <label className="block text-sm font-medium text-gray-300 mb-2">Crash Reporting</label>
+                                <label className="block text-sm font-medium text-secondary mb-2">Crash Reporting</label>
                                 <label className="flex items-center gap-2 cursor-pointer">
                                     <input
                                         type="checkbox"
                                         checked={crashReporting}
                                         onChange={async (e) => {
                                             const enabled = e.target.checked;
-                                            setCrashReporting(enabled);
-                                            await invoke('save_app_setting', { key: 'crash_reporting_enabled', value: enabled ? 'true' : 'false' });
+                                            await toggleCrashReporting(enabled);
                                             // Toggle Sentry at runtime
                                             try {
                                                 const Sentry = await import('@sentry/react');
@@ -266,11 +214,11 @@ export const SettingsModal = ({ onClose }: { onClose: () => void }) => {
                                                 }
                                             } catch { /* Sentry not available */ }
                                         }}
-                                        className="w-4 h-4 rounded border-gray-600 bg-gray-800"
+                                        className="w-4 h-4 rounded border-base bg-surface"
                                     />
-                                    <span className="text-sm text-gray-300">Send anonymous crash reports to help improve FileNova</span>
+                                    <span className="text-sm text-secondary">Send anonymous crash reports to help improve FileNova</span>
                                 </label>
-                                <p className="text-xs text-gray-500 mt-1">No personal data or file contents are ever transmitted.</p>
+                                <p className="text-xs text-muted mt-1">No personal data or file contents are ever transmitted.</p>
                             </div>
                         </div>
                     )}
@@ -281,41 +229,41 @@ export const SettingsModal = ({ onClose }: { onClose: () => void }) => {
 
                     {activeTab === 'indexing' && (
                         <div className="space-y-6">
-                            <h3 className="text-lg font-medium border-b border-gray-700 pb-2">Indexed Directories</h3>
+                            <h3 className="text-lg font-medium border-b border-base pb-2">Indexed Directories</h3>
                             <div className="flex gap-2">
                                 <input
                                     type="text"
                                     value={pathInput}
                                     onChange={(e) => setPathInput(e.target.value)}
                                     placeholder="Enter folder path (e.g. D:\Photos)"
-                                    className="flex-1 px-3 py-2 border border-gray-600 rounded bg-gray-800 text-white text-sm"
+                                    className="flex-1 px-3 py-2 border border-base rounded bg-surface text-primary text-sm"
                                 />
                                 <button
                                     onClick={handleBrowsePath}
-                                    className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded text-sm"
+                                    className="bg-surface-hover hover:bg-surface-active text-primary px-3 py-2 rounded text-sm transition-theme"
                                 >
                                     Browse
                                 </button>
                                 <button
                                     onClick={handleAddPath}
-                                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded flex items-center gap-2 text-sm"
+                                    className="bg-accent-primary hover:bg-surface-active text-white px-4 py-2 rounded flex items-center gap-2 text-sm transition-theme"
                                 >
                                     <Plus size={16} /> Add
                                 </button>
                             </div>
 
-                            <div className="border border-gray-700 rounded-md max-h-60 overflow-y-auto">
+                            <div className="border border-base rounded-md max-h-60 overflow-y-auto">
                                 {settings.indexedPaths.length === 0 ? (
-                                    <div className="p-6 text-center text-gray-500 text-sm">No directories added.</div>
+                                    <div className="p-6 text-center text-muted text-sm">No directories added.</div>
                                 ) : (
-                                    <ul className="divide-y divide-gray-700">
+                                    <ul className="divide-y divide-base">
                                         {settings.indexedPaths.map((path) => (
-                                            <li key={path} className="p-3 flex justify-between items-center hover:bg-gray-800">
+                                            <li key={path} className="p-3 flex justify-between items-center hover:bg-surface-hover transition-theme">
                                                 <div className="flex items-center gap-3">
-                                                    <Folder size={18} className="text-gray-400" />
-                                                    <span className="text-sm truncate max-w-[400px]" title={path}>{path}</span>
+                                                    <Folder size={18} className="text-muted" />
+                                                    <span className="text-sm truncate max-w-[400px] text-secondary" title={path}>{path}</span>
                                                 </div>
-                                                <button onClick={() => removeIndexedPath(path)} className="text-red-500 hover:text-red-400 p-1">
+                                                <button onClick={() => removeIndexedPath(path)} className="text-status-error hover:text-status-error p-1 opacity-80 hover:opacity-100 transition-theme">
                                                     <Trash2 size={16} />
                                                 </button>
                                             </li>
@@ -326,7 +274,7 @@ export const SettingsModal = ({ onClose }: { onClose: () => void }) => {
                             <div className="flex justify-end">
                                 <button
                                     onClick={() => { startIndexing(); }}
-                                    className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded text-sm font-medium"
+                                    className="bg-accent-primary hover:bg-surface-active text-white px-4 py-2 rounded text-sm font-medium transition-theme"
                                 >
                                     Start Indexing
                                 </button>
@@ -336,48 +284,66 @@ export const SettingsModal = ({ onClose }: { onClose: () => void }) => {
 
                     {activeTab === 'ai' && (
                         <div className="space-y-8">
+                            <div className="bg-surface border border-base rounded-md p-4">
+                                <h4 className="text-sm font-semibold text-secondary mb-3">AI Configuration Guide</h4>
+                                <ul className="text-xs text-muted space-y-2 list-disc pl-4">
+                                    {aiProvider === 'ollama' ? (
+                                        <li>
+                                            <strong>Local Search (Ollama):</strong> Download Ollama from <button onClick={() => openUrl('https://ollama.com')} className="text-accent-primary hover:underline inline">ollama.com</button> and keep the service running.
+                                        </li>
+                                    ) : (
+                                        <li>
+                                            <strong>Cloud Search (OpenAI):</strong> Add your API key from <button onClick={() => openUrl('https://platform.openai.com/api-keys')} className="text-accent-primary hover:underline inline">OpenAI Platform</button> to enable embeddings.
+                                        </li>
+                                    )}
+                                    <li>
+                                        <strong>Chat Assistant:</strong> Requires a Google Gemini key. Get it free from <button onClick={() => openUrl('https://aistudio.google.com/app/apikey')} className="text-accent-primary hover:underline inline">Google AI Studio</button>.
+                                    </li>
+                                </ul>
+                            </div>
+
                             <div>
-                                <h3 className="text-lg font-medium border-b border-gray-700 pb-2 mb-4">Content Extraction</h3>
+                                <h3 className="text-lg font-medium border-b border-base pb-2 mb-4">Content Extraction</h3>
                                 {extractionStats && (
                                     <div className="grid grid-cols-2 gap-3 mb-4">
-                                        <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
-                                            <p className="text-xs text-gray-400">Extracted</p>
-                                            <p className="text-lg font-semibold">{extractionStats.extracted_files.toLocaleString()}</p>
-                                            <p className="text-xs text-gray-500">of {extractionStats.total_files.toLocaleString()} files</p>
+                                        <div className="bg-surface rounded-lg p-3 border border-base">
+                                            <p className="text-xs text-muted">Extracted</p>
+                                            <p className="text-lg font-semibold text-primary">{extractionStats.extracted_files.toLocaleString()}</p>
+                                            <p className="text-xs text-muted">of {extractionStats.total_files.toLocaleString()} files</p>
                                         </div>
-                                        <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
-                                            <p className="text-xs text-gray-400">Embeddings</p>
-                                            <p className="text-lg font-semibold">{extractionStats.embedded_files.toLocaleString()}</p>
-                                            <p className="text-xs text-gray-500">{extractionStats.pending_files.toLocaleString()} pending</p>
+                                        <div className="bg-surface rounded-lg p-3 border border-base">
+                                            <p className="text-xs text-muted">Embeddings</p>
+                                            <p className="text-lg font-semibold text-primary">{extractionStats.embedded_files.toLocaleString()}</p>
+                                            <p className="text-xs text-muted">{extractionStats.pending_files.toLocaleString()} pending</p>
                                         </div>
                                         {extractionStats.failed_files > 0 && (
-                                            <div className="bg-red-900/20 border border-red-900/50 rounded-lg p-3 col-span-2">
-                                                <p className="text-xs text-red-400">{extractionStats.failed_files.toLocaleString()} files failed extraction</p>
+                                            <div className="bg-surface border border-base rounded-lg p-3 col-span-2">
+                                                <p className="text-xs text-status-error">{extractionStats.failed_files.toLocaleString()} files failed extraction</p>
                                             </div>
                                         )}
                                     </div>
                                 )}
                                 <button
                                     onClick={handleStartExtraction}
-                                    className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded text-sm font-medium"
+                                    className="bg-accent-primary hover:bg-surface-active text-white px-4 py-2 rounded text-sm font-medium transition-theme"
                                 >
                                     Start Content Extraction
                                 </button>
                             </div>
 
                             <div>
-                                <h3 className="text-lg font-medium border-b border-gray-700 pb-2 mb-4">AI Provider</h3>
+                                <h3 className="text-lg font-medium border-b border-base pb-2 mb-4">AI Provider</h3>
                                 <div className="space-y-4">
                                     <div>
-                                        <label className="block text-xs text-gray-400 mb-1">Provider</label>
+                                        <label className="block text-xs text-muted mb-1">Provider</label>
                                         <select
                                             value={aiProvider}
                                             onChange={(e) => {
-                                                setAiProvider(e.target.value);
-                                                if (e.target.value === 'openai') setModelName('text-embedding-3-small');
-                                                else setModelName('nomic-embed-text');
+                                                setField('aiProvider', e.target.value);
+                                                if (e.target.value === 'openai') setField('modelName', 'text-embedding-3-small');
+                                                else setField('modelName', 'nomic-embed-text');
                                             }}
-                                            className="w-full px-3 py-2 border border-gray-600 rounded bg-gray-800 text-white text-sm"
+                                            className="w-full px-3 py-2 border border-base rounded bg-surface text-primary text-sm"
                                         >
                                             <option value="ollama">Ollama (Local)</option>
                                             <option value="openai">OpenAI (Cloud)</option>
@@ -386,23 +352,47 @@ export const SettingsModal = ({ onClose }: { onClose: () => void }) => {
 
                                     {aiProvider === 'ollama' && (
                                         <div>
-                                            <label className="block text-xs text-gray-400 mb-1">Ollama URL</label>
+                                            <label className="block text-xs text-muted mb-1">Ollama URL</label>
                                             <input
                                                 type="text"
                                                 value={providerUrl}
-                                                onChange={(e) => setProviderUrl(e.target.value)}
-                                                className="w-full px-3 py-2 border border-gray-600 rounded bg-gray-800 text-white text-sm"
+                                                onChange={(e) => setField('providerUrl', e.target.value)}
+                                                className="w-full px-3 py-2 border border-base rounded bg-surface text-primary text-sm"
                                             />
                                         </div>
                                     )}
 
                                     <div>
-                                        <label className="block text-xs text-gray-400 mb-1">Embedding Model</label>
+                                        <label className="block text-xs text-muted mb-1">Embedding Model</label>
                                         <input
                                             type="text"
                                             value={modelName}
-                                            onChange={(e) => setModelName(e.target.value)}
-                                            className="w-full px-3 py-2 border border-gray-600 rounded bg-gray-800 text-white text-sm"
+                                            onChange={(e) => setField('modelName', e.target.value)}
+                                            className="w-full px-3 py-2 border border-base rounded bg-surface text-primary text-sm"
+                                        />
+                                    </div>
+
+                                    {aiProvider === 'openai' && (
+                                        <div>
+                                            <label className="block text-xs text-muted mb-1">OpenAI API Key</label>
+                                            <input
+                                                type="password"
+                                                value={openaiApiKey}
+                                                onChange={(e) => setField('openaiApiKey', e.target.value)}
+                                                className="w-full px-3 py-2 border border-base rounded bg-surface text-primary text-sm"
+                                                placeholder="sk-..."
+                                            />
+                                        </div>
+                                    )}
+
+                                    <div>
+                                        <label className="block text-xs text-muted mb-1">Gemini API Key (for Chat)</label>
+                                        <input
+                                            type="password"
+                                            value={geminiApiKey}
+                                            onChange={(e) => setField('geminiApiKey', e.target.value)}
+                                            className="w-full px-3 py-2 border border-base rounded bg-surface text-primary text-sm"
+                                            placeholder="AIza..."
                                         />
                                     </div>
 
@@ -410,7 +400,7 @@ export const SettingsModal = ({ onClose }: { onClose: () => void }) => {
                                         <button
                                             onClick={handleCheckConnection}
                                             disabled={checkingAi}
-                                            className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded text-sm font-medium flex items-center gap-2 disabled:opacity-50"
+                                            className="bg-surface-hover hover:bg-surface-active text-secondary px-4 py-2 rounded text-sm font-medium flex items-center gap-2 disabled:opacity-50 transition-theme"
                                         >
                                             {checkingAi ? <Loader2 size={14} className="animate-spin" /> : null}
                                             Check Connection
@@ -419,13 +409,13 @@ export const SettingsModal = ({ onClose }: { onClose: () => void }) => {
                                             <span className="flex items-center gap-1.5 text-sm">
                                                 {aiStatus.ollama_running && aiStatus.model_available ? (
                                                     <>
-                                                        <CheckCircle size={16} className="text-green-500" />
-                                                        <span className="text-green-400">Connected - {aiStatus.model_name}</span>
+                                                        <CheckCircle size={16} className="text-status-success" />
+                                                        <span className="text-status-success">Connected - {aiStatus.model_name}</span>
                                                     </>
                                                 ) : (
                                                     <>
-                                                        <XCircle size={16} className="text-red-500" />
-                                                        <span className="text-red-400">Failed</span>
+                                                        <XCircle size={16} className="text-status-error" />
+                                                        <span className="text-status-error">Failed</span>
                                                     </>
                                                 )}
                                             </span>

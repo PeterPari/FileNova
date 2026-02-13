@@ -14,10 +14,10 @@
   --text-disabled: #606060;
   
   /* Accent Colors */
-  --accent-blue: #3b82f6;
-  --accent-blue-hover: #2563eb;
-  --accent-green: #10b981;
-  --accent-green-hover: #059669;
+  --accent-blue: #0ea5e9;
+  --accent-blue-hover: #0284c7;
+  --accent-green: #34d399;
+  --accent-green-hover: #10b981;
   --accent-red: #ef4444;
   --accent-red-hover: #dc2626;
   --accent-yellow: #f59e0b;
@@ -26,7 +26,7 @@
   /* Borders */
   --border-primary: #404040;
   --border-secondary: #333333;
-  --border-focus: #3b82f6;
+  --border-focus: #0ea5e9;
   
   /* Shadows */
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
@@ -44,10 +44,10 @@
   --syntax-operator: #89ddff;
   
   /* Status Colors */
-  --status-success: #10b981;
+  --status-success: #34d399;
   --status-warning: #f59e0b;
   --status-error: #ef4444;
-  --status-info: #3b82f6;
+  --status-info: #0ea5e9;
   
   /* Spacing (can be overridden by compact mode) */
   --spacing-xs: 0.25rem;

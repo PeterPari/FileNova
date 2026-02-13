@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
+import { duplicatesService } from '../services/duplicatesService';
 
 export interface DuplicateFileEntry {
     id: number;
@@ -73,6 +74,7 @@ interface DuplicateStore {
     deleteSelectedFiles: () => Promise<BatchResult | null>;
     undoBatch: (batchId: string) => Promise<void>;
     fetchRecentBatches: () => Promise<void>;
+    refreshDashboard: () => Promise<void>;
     setFilterType: (type: string | null) => void;
     autoSelectKeepNewest: (group: DuplicateGroup) => void;
     autoSelectKeepInPath: (group: DuplicateGroup, pathSubstring: string) => void;
@@ -176,11 +178,8 @@ export const useDuplicateStore = create<DuplicateStore>((set, get) => ({
                 fileIds: deleteIds,
                 keepFileId: keepFile.file_id,
             });
-            await get().fetchSummary();
-            await get().fetchGroups();
-            await get().fetchRecentBatches();
+            await get().refreshDashboard();
             set({
-                isLoading: false,
                 selectedFilePaths: [],
                 keepFilePath: null,
                 selectedGroupId: null,
@@ -195,9 +194,7 @@ export const useDuplicateStore = create<DuplicateStore>((set, get) => ({
     undoBatch: async (batchId) => {
         try {
             await invoke('undo_batch', { batchId });
-            await get().fetchSummary();
-            await get().fetchGroups();
-            await get().fetchRecentBatches();
+            await get().refreshDashboard();
         } catch (err) {
             set({ error: String(err) });
         }
@@ -216,7 +213,7 @@ export const useDuplicateStore = create<DuplicateStore>((set, get) => ({
 
     setFilterType: (type) => {
         set({ filterType: type });
-        get().fetchGroups(type);
+        get().refreshDashboard();
     },
 
     autoSelectKeepNewest: (group) => {
@@ -231,6 +228,20 @@ export const useDuplicateStore = create<DuplicateStore>((set, get) => ({
         const keep = group.files.find((f) => f.path.startsWith(pathSubstring));
         if (keep) {
             get().selectAllExceptKeep(group.files, keep.path);
+        }
+    },
+    refreshDashboard: async () => {
+        set({ isLoading: true, error: null });
+        try {
+            const snapshot = await duplicatesService.refreshDashboard(get().filterType);
+            set({
+                summary: snapshot.summary,
+                groups: snapshot.groups,
+                recentBatches: snapshot.recentBatches,
+                isLoading: false,
+            });
+        } catch (err) {
+            set({ error: String(err), isLoading: false });
         }
     },
 }));

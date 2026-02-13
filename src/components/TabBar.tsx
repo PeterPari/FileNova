@@ -25,11 +25,11 @@ export const TabBar = () => {
     }, [tabs, activeTabIndex]);
 
     return (
-        <div className="flex items-center bg-gray-100 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-2 pt-2 gap-1 overflow-x-auto no-scrollbar">
+        <div className="flex items-center bg-surface px-2 pt-1.5 gap-1 overflow-x-auto no-scrollbar">
             {hiddenBefore > 0 && (
                 <button
                     onClick={() => setActiveTab(Math.max(0, activeTabIndex - VISIBLE_WINDOW))}
-                    className="flex items-center gap-1 px-2 py-1.5 text-xs text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-t-lg"
+                    className="flex items-center gap-1 px-2 py-1.5 text-xs text-muted hover:bg-surface-hover rounded-t-lg transition-theme"
                     title={`${hiddenBefore} more tab(s)`}
                 >
                     <ChevronLeft size={12} />
@@ -44,10 +44,10 @@ export const TabBar = () => {
                         key={index}
                         onClick={() => setActiveTab(index)}
                         className={`
-                            group flex items-center gap-2 px-3 py-1.5 rounded-t-lg text-sm cursor-pointer select-none min-w-[120px] max-w-[200px] border-t border-x
+                            group flex items-center gap-2 px-3 py-1.5 rounded-t-lg text-sm cursor-pointer select-none min-w-[120px] max-w-[200px] border-t border-x transition-theme
                             ${isActive
-                                ? 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700 text-blue-600 dark:text-blue-400 font-medium z-10 -mb-[1px] pb-2'
-                                : 'bg-gray-200 dark:bg-gray-800 border-transparent text-gray-500 hover:bg-gray-300 dark:hover:bg-gray-700'
+                                ? 'bg-base border-base text-accent-primary font-medium z-10 -mb-px pb-2'
+                                : 'bg-surface-hover border-transparent text-secondary hover:bg-surface-active'
                             }
                         `}
                     >
@@ -62,7 +62,7 @@ export const TabBar = () => {
                                     e.stopPropagation();
                                     closeTab(index);
                                 }}
-                                className={`p-0.5 rounded-full hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-400 opacity-0 group-hover:opacity-100 ${isActive ? 'opacity-100' : ''}`}
+                                className={`p-0.5 rounded-full hover:bg-surface-active text-muted transition-theme opacity-0 group-hover:opacity-100 ${isActive ? 'opacity-100' : ''}`}
                             >
                                 <X size={12} />
                             </button>
@@ -74,7 +74,7 @@ export const TabBar = () => {
             {hiddenAfter > 0 && (
                 <button
                     onClick={() => setActiveTab(Math.min(tabs.length - 1, activeTabIndex + VISIBLE_WINDOW))}
-                    className="flex items-center gap-1 px-2 py-1.5 text-xs text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-t-lg"
+                    className="flex items-center gap-1 px-2 py-1.5 text-xs text-muted hover:bg-surface-hover rounded-t-lg transition-theme"
                     title={`${hiddenAfter} more tab(s)`}
                 >
                     <span>{hiddenAfter}</span>
@@ -84,7 +84,7 @@ export const TabBar = () => {
 
             <button
                 onClick={() => addTab('')}
-                className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-md ml-1"
+                className="p-1.5 text-muted hover:text-primary hover:bg-surface-hover rounded-md ml-1 transition-theme"
             >
                 <Plus size={16} />
             </button>

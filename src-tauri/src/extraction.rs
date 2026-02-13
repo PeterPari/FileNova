@@ -82,7 +82,13 @@ pub fn start_extraction(
     state.failed_files.store(0, Ordering::SeqCst);
 
     std::thread::spawn(move || {
-        let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
+        let db_path = match app.path().app_data_dir() {
+            Ok(dir) => dir.join("filenova.db"),
+            Err(_) => {
+                state.is_extracting.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
         let mut conn = Connection::open(&db_path).expect("Failed to open DB for extraction");
 
         // Fetch files needing extraction OR embedding

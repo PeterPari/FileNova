@@ -378,12 +378,13 @@ export const CommandPalette = ({ isOpen, onClose }: CommandPaletteProps) => {
             onClick={onClose}
         >
             <div
-                className="w-full max-w-2xl bg-white dark:bg-gray-900 rounded-lg shadow-2xl overflow-hidden"
+                className="w-full max-w-2xl bg-base rounded-lg overflow-hidden"
+                style={{ boxShadow: 'var(--shadow-xl)' }}
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* Search Input */}
-                <div className="flex items-center gap-3 p-4 border-b border-gray-200 dark:border-gray-700">
-                    <Search size={20} className="text-gray-400" />
+                <div className="flex items-center gap-3 p-4 border-b border-base">
+                    <Search size={20} className="text-muted" />
                     <input
                         type="text"
                         value={query}
@@ -395,19 +396,19 @@ export const CommandPalette = ({ isOpen, onClose }: CommandPaletteProps) => {
                         className="flex-1 bg-transparent outline-none text-lg"
                         autoFocus
                     />
-                    <kbd className="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-800 rounded">Esc</kbd>
+                    <kbd className="px-2 py-1 text-xs bg-surface rounded">Esc</kbd>
                 </div>
 
                 {/* Results */}
                 <div className="max-h-96 overflow-y-auto">
                     {filteredCommands.length === 0 ? (
-                        <div className="p-8 text-center text-gray-400">
+                        <div className="p-8 text-center text-muted">
                             <p>No commands found</p>
                         </div>
                     ) : (
                         <div className="py-2">
                             {!query && recentCommands.length > 0 && (
-                                <div className="px-4 py-2 text-xs font-semibold text-gray-400 uppercase">
+                                <div className="px-4 py-2 text-xs font-semibold text-muted uppercase">
                                     Recent
                                 </div>
                             )}
@@ -415,21 +416,22 @@ export const CommandPalette = ({ isOpen, onClose }: CommandPaletteProps) => {
                                 <div
                                     key={cmd.id}
                                     id={`command-${index}`}
-                                    className={`flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors ${
+                                    className={`flex items-center gap-3 px-4 py-3 cursor-pointer transition-theme ${
                                         index === selectedIndex
-                                            ? 'bg-blue-50 dark:bg-blue-900 dark:bg-opacity-30'
-                                            : 'hover:bg-gray-50 dark:hover:bg-gray-800'
+                                            ? 'bg-surface-hover'
+                                            : 'hover:bg-surface-hover'
                                     }`}
+                                    style={index === selectedIndex ? { backgroundColor: 'color-mix(in srgb, var(--accent-blue) 12%, transparent)' } : undefined}
                                     onClick={() => cmd.action()}
                                     onMouseEnter={() => setSelectedIndex(index)}
                                 >
-                                    <div className="flex-shrink-0 w-8 h-8 flex items-center justify-center text-blue-500">
+                                    <div className="flex-shrink-0 w-8 h-8 flex items-center justify-center text-accent-primary">
                                         {cmd.icon}
                                     </div>
                                     <div className="flex-1 min-w-0">
                                         <div className="font-medium">{cmd.label}</div>
                                         {cmd.description && (
-                                            <div className="text-sm text-gray-500 truncate">
+                                            <div className="text-sm text-muted truncate">
                                                 {cmd.description}
                                             </div>
                                         )}
@@ -440,16 +442,16 @@ export const CommandPalette = ({ isOpen, onClose }: CommandPaletteProps) => {
                                                 e.stopPropagation();
                                                 togglePin(cmd.id);
                                             }}
-                                            className={`p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 ${
+                                            className={`p-1 rounded hover:bg-surface-hover transition-theme ${
                                                 pinnedCommands.includes(cmd.id)
                                                     ? 'text-yellow-500'
-                                                    : 'text-gray-400'
+                                                    : 'text-muted'
                                             }`}
                                             title={pinnedCommands.includes(cmd.id) ? 'Unpin' : 'Pin'}
                                         >
                                             <Star size={14} fill={pinnedCommands.includes(cmd.id) ? 'currentColor' : 'none'} />
                                         </button>
-                                        <span className="text-xs text-gray-400 uppercase bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded">
+                                        <span className="text-xs text-muted uppercase bg-surface px-2 py-1 rounded">
                                             {cmd.category}
                                         </span>
                                     </div>
@@ -460,18 +462,18 @@ export const CommandPalette = ({ isOpen, onClose }: CommandPaletteProps) => {
                 </div>
 
                 {/* Footer */}
-                <div className="p-3 border-t border-gray-200 dark:border-gray-700 flex items-center justify-center gap-4 text-xs text-gray-500">
+                <div className="p-3 border-t border-base flex items-center justify-center gap-4 text-xs text-muted">
                     <span>
-                        <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-800 rounded">↑</kbd>
-                        <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-800 rounded ml-1">↓</kbd>
+                        <kbd className="px-1.5 py-0.5 bg-surface rounded">↑</kbd>
+                        <kbd className="px-1.5 py-0.5 bg-surface rounded ml-1">↓</kbd>
                         <span className="ml-2">Navigate</span>
                     </span>
                     <span>
-                        <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-800 rounded">Enter</kbd>
+                        <kbd className="px-1.5 py-0.5 bg-surface rounded">Enter</kbd>
                         <span className="ml-2">Execute</span>
                     </span>
                     <span>
-                        <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-800 rounded">Esc</kbd>
+                        <kbd className="px-1.5 py-0.5 bg-surface rounded">Esc</kbd>
                         <span className="ml-2">Close</span>
                     </span>
                 </div>

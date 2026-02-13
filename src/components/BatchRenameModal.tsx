@@ -206,14 +206,14 @@ export const BatchRenameModal: React.FC<BatchRenameModalProps> = ({ isOpen, onCl
 
     return (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-            <div className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-[800px] h-[600px] flex flex-col">
+            <div className="bg-base border border-base rounded-xl w-[800px] h-[600px] flex flex-col" style={{ boxShadow: 'var(--shadow-xl)' }}>
                 {/* Header */}
-                <div className="p-4 border-b border-gray-800 flex justify-between items-center">
+                <div className="p-4 border-b border-base flex justify-between items-center">
                     <h2 className="text-xl font-semibold text-white flex items-center gap-2">
                         <RefreshCw className="w-5 h-5 text-blue-400" />
                         Batch Rename
                     </h2>
-                    <button onClick={onClose} className="text-gray-400 hover:text-white">
+                    <button onClick={onClose} className="text-muted hover:text-white">
                         <X className="w-5 h-5" />
                     </button>
                 </div>
@@ -222,13 +222,13 @@ export const BatchRenameModal: React.FC<BatchRenameModalProps> = ({ isOpen, onCl
                 <div className="flex-1 p-6 overflow-hidden flex flex-col gap-6">
                     {/* Pattern Input */}
                     <div className="space-y-2">
-                        <label className="text-sm font-medium text-gray-300">Naming Pattern</label>
+                        <label className="text-sm font-medium text-secondary">Naming Pattern</label>
                         <div className="flex gap-2">
                             <input
                                 type="text"
                                 value={pattern}
                                 onChange={(e) => setPattern(e.target.value)}
-                                className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                className="flex-1 bg-surface border border-base rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                                 placeholder="{name}_{counter}"
                             />
                             <button
@@ -255,15 +255,15 @@ export const BatchRenameModal: React.FC<BatchRenameModalProps> = ({ isOpen, onCl
                             <TokenButton token="{DD}" onClick={() => setPattern(p => p + '{DD}')} />
                             <TokenButton token="{ext}" onClick={() => setPattern(p => p + '{ext}')} />
                         </div>
-                        <p className="text-xs text-gray-400">Available tokens: {"{filename}, {tag}, {counter}, {YYYY}, {MM}, {DD}, {ext}"}</p>
+                        <p className="text-xs text-muted">Available tokens: {"{filename}, {tag}, {counter}, {YYYY}, {MM}, {DD}, {ext}"}</p>
                         {aiSuggestion && aiSuggestion.examples?.length > 0 && (
-                            <div className="mt-3 bg-gray-800/50 border border-gray-700 rounded-lg p-3">
-                                <div className="text-xs uppercase text-gray-500 font-semibold mb-2">AI Examples</div>
-                                <div className="space-y-1 text-xs text-gray-300">
+                            <div className="mt-3 bg-surface-hover border border-base rounded-lg p-3">
+                                <div className="text-xs uppercase text-muted font-semibold mb-2">AI Examples</div>
+                                <div className="space-y-1 text-xs text-secondary">
                                     {aiSuggestion.examples.slice(0, 3).map((ex, idx) => (
                                         <div key={idx} className="flex items-center gap-2">
-                                            <span className="text-gray-500 truncate">{ex.old}</span>
-                                            <ArrowRight className="w-3 h-3 text-gray-600" />
+                                            <span className="text-muted truncate">{ex.old}</span>
+                                            <ArrowRight className="w-3 h-3 text-secondary" />
                                             <span className="text-green-400 truncate">{ex.new}</span>
                                         </div>
                                     ))}
@@ -281,30 +281,30 @@ export const BatchRenameModal: React.FC<BatchRenameModalProps> = ({ isOpen, onCl
                                     type="checkbox"
                                     checked={applyToAllConflicts}
                                     onChange={(e) => setApplyToAllConflicts(e.target.checked)}
-                                    className="w-3.5 h-3.5 rounded bg-gray-800 border-gray-600"
+                                    className="w-3.5 h-3.5 rounded bg-surface border-base"
                                 />
                                 Apply to all conflicts
                             </label>
                         </div>
                     )}
-                    <div className="flex-1 border border-gray-800 rounded-lg overflow-hidden flex flex-col bg-gray-950/50">
-                        <div className="bg-gray-900/50 px-4 py-2 border-b border-gray-800 grid grid-cols-2 gap-4 text-xs font-medium text-gray-400 uppercase tracking-wider">
+                    <div className="flex-1 border border-base rounded-lg overflow-hidden flex flex-col bg-base">
+                        <div className="bg-surface px-4 py-2 border-b border-base grid grid-cols-2 gap-4 text-xs font-medium text-muted uppercase tracking-wider">
                             <div>Original Name</div>
                             <div>New Name</div>
                         </div>
                         <div className="overflow-y-auto flex-1 p-2 space-y-1">
                             {isLoading && previews.length === 0 ? (
-                                <div className="text-center py-10 text-gray-500 flex flex-col items-center gap-2">
+                                <div className="text-center py-10 text-muted flex flex-col items-center gap-2">
                                     <RefreshCw className="w-5 h-5 animate-spin" />
                                     <span>Generating preview...</span>
                                 </div>
                             ) : (
                                 previews.map((preview, idx) => (
-                                    <div key={preview.file_id || idx} className="grid grid-cols-2 gap-4 px-2 py-2 hover:bg-gray-800/50 rounded text-sm group">
-                                        <div className="text-gray-400 truncate">{preview.original_name}</div>
+                                    <div key={preview.file_id || idx} className="grid grid-cols-2 gap-4 px-2 py-2 hover:bg-surface-hover rounded text-sm group">
+                                        <div className="text-muted truncate">{preview.original_name}</div>
                                         <div className="flex flex-col gap-1">
                                             <div className="text-green-400 truncate flex items-center gap-2">
-                                                <ArrowRight className="w-3 h-3 text-gray-600 group-hover:text-gray-500" />
+                                                <ArrowRight className="w-3 h-3 text-secondary group-hover:text-muted" />
                                                 {preview.new_name}
                                             </div>
                                             {preview.conflict && (
@@ -313,7 +313,7 @@ export const BatchRenameModal: React.FC<BatchRenameModalProps> = ({ isOpen, onCl
                                                     <span>{preview.conflict.message}</span>
                                                     <div className="ml-auto flex items-center gap-2">
                                                         <select
-                                                            className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"
+                                                            className="bg-surface border border-base rounded px-2 py-1 text-xs text-primary"
                                                             value={actionOverrides[preview.original_path]?.skip ? 'skip' : actionOverrides[preview.original_path]?.overwrite ? 'overwrite' : 'unresolved'}
                                                             onChange={(e) => {
                                                                 const value = e.target.value as 'skip' | 'rename' | 'overwrite' | 'unresolved';
@@ -331,10 +331,10 @@ export const BatchRenameModal: React.FC<BatchRenameModalProps> = ({ isOpen, onCl
                                                 </div>
                                             )}
                                             {!preview.conflict && actionOverrides[preview.original_path]?.skip && (
-                                                <div className="text-xs text-gray-500">Skipped</div>
+                                                <div className="text-xs text-muted">Skipped</div>
                                             )}
                                             {!preview.conflict && actionOverrides[preview.original_path]?.overwrite && (
-                                                <div className="text-xs text-gray-500">Overwrite enabled</div>
+                                                <div className="text-xs text-muted">Overwrite enabled</div>
                                             )}
                                         </div>
                                     </div>
@@ -359,10 +359,10 @@ export const BatchRenameModal: React.FC<BatchRenameModalProps> = ({ isOpen, onCl
                 </div>
 
                 {/* Footer */}
-                <div className="p-4 border-t border-gray-800 flex justify-end gap-3 bg-gray-900/50">
+                <div className="p-4 border-t border-base flex justify-end gap-3 bg-surface">
                     <button
                         onClick={onClose}
-                        className="px-4 py-2 rounded-lg text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+                        className="px-4 py-2 rounded-lg text-secondary hover:bg-surface-hover hover:text-white transition-colors"
                     >
                         Cancel
                     </button>
@@ -374,7 +374,8 @@ export const BatchRenameModal: React.FC<BatchRenameModalProps> = ({ isOpen, onCl
                             !!successMsg ||
                             previews.some(p => p.conflict && !actionOverrides[p.original_path]?.skip && !actionOverrides[p.original_path]?.overwrite)
                         }
-                        className="px-6 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium shadow-lg hover:shadow-blue-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                        className="px-6 py-2 rounded-lg bg-accent-primary hover:bg-blue-500 text-white font-medium hover:shadow-blue-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                        style={{ boxShadow: 'var(--shadow-lg)' }}
                     >
                         {isLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                         Rename {previews.length} Files
@@ -388,7 +389,7 @@ export const BatchRenameModal: React.FC<BatchRenameModalProps> = ({ isOpen, onCl
 const TokenButton = ({ token, onClick }: { token: string; onClick: () => void }) => (
     <button
         onClick={onClick}
-        className="px-2 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded text-xs text-gray-300 transition-colors"
+        className="px-2 py-1 bg-surface hover:bg-surface-hover border border-base rounded text-xs text-secondary transition-colors"
     >
         {token}
     </button>
@@ -397,7 +398,7 @@ const TokenButton = ({ token, onClick }: { token: string; onClick: () => void })
 const TemplateButton = ({ label, onClick }: { label: string; onClick: () => void }) => (
     <button
         onClick={onClick}
-        className="px-2.5 py-1 bg-gray-800/70 hover:bg-gray-700 border border-gray-700 rounded text-xs text-gray-200 transition-colors"
+        className="px-2.5 py-1 bg-surface hover:bg-surface-hover border border-base rounded text-xs text-primary transition-colors"
     >
         {label}
     </button>

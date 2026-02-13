@@ -1,12 +1,13 @@
-import { useRef, useEffect, useState, useMemo, useCallback } from 'react';
+import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useFileStore } from '../store/fileStore';
-import { File, Folder, X, Grid, List as ListIcon, ChevronUp, ChevronDown, Edit2, Wand2, Pin, MoreHorizontal } from 'lucide-react';
+import { FileEntry, useFileStore } from '../store/fileStore';
+import { File, Folder, X, Grid, List as ListIcon, ChevronUp, ChevronDown, Edit2, Wand2, Pin } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { TagManager } from './TagManager';
 import { BatchRenameModal } from './BatchRenameModal';
 import { UndoManager } from './UndoManager';
 import { FileContextMenu } from './FileContextMenu';
+import { useFileSelectionNavigation } from '../hooks/useFileSelectionNavigation';
 
 export const FileBrowser = () => {
     const {
@@ -42,25 +43,8 @@ export const FileBrowser = () => {
         return () => resizeObserver.disconnect();
     }, []);
 
-    const sortedFiles = useMemo(() => {
-        return [...files].sort((a, b) => {
-            if (a.is_directory !== b.is_directory) {
-                return a.is_directory ? -1 : 1;
-            }
-            let compare = 0;
-            switch (sortField) {
-                case 'name': compare = a.name.localeCompare(b.name); break;
-                case 'size': compare = a.size - b.size; break;
-                case 'date': compare = a.modified_at - b.modified_at; break;
-                case 'type':
-                    const extA = a.name.split('.').pop() || '';
-                    const extB = b.name.split('.').pop() || '';
-                    compare = extA.localeCompare(extB);
-                    break;
-            }
-            return sortDirection === 'asc' ? compare : -compare;
-        });
-    }, [files, sortField, sortDirection]);
+    // Use the store's single source-of-truth sorting (memoized inside the store)
+    const sortedFiles = useFileStore(state => state.getSortedFiles());
 
     useEffect(() => {
         if (!selectedFile) {
@@ -82,7 +66,9 @@ export const FileBrowser = () => {
         overscan: 5,
     });
 
-    const getFileTypeLabel = (file: any) => {
+    const selectedPathSet = useMemo(() => new Set(selectedFiles.map((file) => file.path)), [selectedFiles]);
+
+    const getFileTypeLabel = (file: FileEntry) => {
         if (file.is_directory) return 'Folder';
         const ext = file.name.split('.').pop() || '';
         return ext ? ext.toUpperCase() : 'File';
@@ -94,69 +80,27 @@ export const FileBrowser = () => {
         rowVirtualizer.scrollToIndex(rowIndex, { align: 'auto' });
     };
 
-    const isTypingTarget = (target: EventTarget | null) => {
-        if (!(target instanceof HTMLElement)) return false;
-        if (target.isContentEditable) return true;
-        const tag = target.tagName.toLowerCase();
-        return tag === 'input' || tag === 'textarea' || tag === 'select';
-    };
+    useFileSelectionNavigation({
+        sortedFiles,
+        focusedIndex,
+        columns,
+        viewMode,
+        selectedFile,
+        navigateUp,
+        setCurrentPath,
+        selectFile,
+        onFocusIndexChange: setFocusedIndex,
+        onSelectAll: () => useFileStore.getState().selectAll(),
+        scrollToIndex: scrollToFileIndex,
+    });
 
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (isTypingTarget(e.target)) return;
-
-            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
-                e.preventDefault();
-                useFileStore.getState().selectAll();
-                return;
-            }
-
-            if (sortedFiles.length === 0) return;
-            const currentIndex = focusedIndex >= 0 ? focusedIndex : 0;
-            let nextIndex = currentIndex;
-
-            switch (e.key) {
-                case 'ArrowDown':
-                    e.preventDefault();
-                    nextIndex = viewMode === 'grid' ? Math.min(currentIndex + columns, sortedFiles.length - 1) : Math.min(currentIndex + 1, sortedFiles.length - 1);
-                    break;
-                case 'ArrowUp':
-                    e.preventDefault();
-                    nextIndex = viewMode === 'grid' ? Math.max(currentIndex - columns, 0) : Math.max(currentIndex - 1, 0);
-                    break;
-                case 'ArrowRight':
-                    if (viewMode === 'grid') { e.preventDefault(); nextIndex = Math.min(currentIndex + 1, sortedFiles.length - 1); }
-                    break;
-                case 'ArrowLeft':
-                    if (viewMode === 'grid') { e.preventDefault(); nextIndex = Math.max(currentIndex - 1, 0); }
-                    break;
-                case 'Enter':
-                    if (selectedFile?.is_directory) { e.preventDefault(); setCurrentPath(selectedFile.path); }
-                    return;
-                case 'Backspace':
-                    e.preventDefault(); navigateUp(); return;
-                default: return;
-            }
-
-            if (nextIndex !== currentIndex) {
-                const nextFile = sortedFiles[nextIndex];
-                setFocusedIndex(nextIndex);
-                selectFile(nextFile, false, false);
-                scrollToFileIndex(nextIndex);
-            }
-        };
-
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [columns, focusedIndex, navigateUp, selectFile, selectedFile, setCurrentPath, sortedFiles, viewMode]);
-
-    const handleDoubleClick = (file: any) => {
+    const handleDoubleClick = (file: FileEntry) => {
         if (file.is_directory) {
             setCurrentPath(file.path);
         }
     };
 
-    const handleSelect = useCallback((file: any, e: React.MouseEvent) => {
+    const handleSelect = useCallback((file: FileEntry, e: React.MouseEvent) => {
         // Standard Desktop Behavior: Single click selects. Double click navigates (handled separately).
         selectFile(file, e.ctrlKey || e.metaKey, e.shiftKey);
 
@@ -167,15 +111,15 @@ export const FileBrowser = () => {
         }
     }, [selectFile]);
 
-    const handleContextMenu = useCallback((e: React.MouseEvent, file: any) => {
+    const handleContextMenu = useCallback((e: React.MouseEvent, file: FileEntry) => {
         e.preventDefault();
         e.stopPropagation();
-        const isSelected = selectedFiles.some(f => f.path === file.path);
+        const isSelected = selectedPathSet.has(file.path);
         if (!isSelected) {
             selectFile(file, false, false);
         }
         setContextMenu({ x: e.clientX, y: e.clientY });
-    }, [selectFile, selectedFiles]);
+    }, [selectFile, selectedPathSet]);
 
     const formatSize = (bytes: number) => {
         if (bytes === 0) return '0 B';
@@ -194,12 +138,12 @@ export const FileBrowser = () => {
         try { await invoke('toggle_pin_file', { path: selectedFile.path }); await loadPinnedFiles(); } catch (e) { }
     };
 
-    const SortIcon = ({ field }: { field: any }) => {
+    const SortIcon = ({ field }: { field: 'name' | 'size' | 'date' | 'type' }) => {
         if (sortField !== field) return null;
         return sortDirection === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />;
     };
 
-    const SortHeader = ({ label, field, className }: { label: string, field: any, className?: string }) => (
+    const SortHeader = ({ label, field, className }: { label: string, field: 'name' | 'size' | 'date' | 'type', className?: string }) => (
         <div
             className={`flex items-center gap-1 cursor-pointer hover:bg-surface-hover hover:text-primary p-2 rounded transition-colors ${className}`}
             onClick={() => setSort(field)}
@@ -282,7 +226,7 @@ export const FileBrowser = () => {
                         {rowVirtualizer.getVirtualItems().map((virtualRow) => {
                             if (viewMode === 'list') {
                                 const file = sortedFiles[virtualRow.index];
-                                const isSelected = selectedFiles.some(f => f.path === file.path);
+                                const isSelected = selectedPathSet.has(file.path);
                                 return (
                                     <div
                                         key={virtualRow.key}
@@ -303,7 +247,7 @@ export const FileBrowser = () => {
                                         </span>
 
                                         <div className="w-40 mr-4 hidden md:flex items-center gap-1 overflow-hidden">
-                                            {file.tags?.slice(0, 2).map((tag: any) => (
+                                            {file.tags?.slice(0, 2).map((tag) => (
                                                 <button
                                                     key={tag.id}
                                                     className="text-[10px] bg-surface-hover px-1.5 py-0.5 rounded text-secondary hover:text-primary truncate max-w-[80px]"
@@ -335,7 +279,7 @@ export const FileBrowser = () => {
                                         style={{ transform: `translateY(${virtualRow.start}px)`, height: '180px' }}
                                     >
                                         {rowFiles.map((file) => {
-                                            const isSelected = selectedFiles.some(f => f.path === file.path);
+                                            const isSelected = selectedPathSet.has(file.path);
                                             return (
                                                 <div
                                                     key={file.path}
@@ -360,7 +304,7 @@ export const FileBrowser = () => {
                                                     </span>
 
                                                     <div className="flex flex-wrap justify-center gap-1 mt-auto px-1 h-5 overflow-hidden w-full opacity-0 group-hover:opacity-100 transition-opacity">
-                                                        {file.tags?.slice(0, 2).map((tag: any) => (
+                                                        {file.tags?.slice(0, 2).map((tag) => (
                                                             <span key={tag.id} className="text-[9px] bg-accent-primary/10 text-accent-primary px-1 rounded truncate max-w-full">
                                                                 {tag.tag}
                                                             </span>

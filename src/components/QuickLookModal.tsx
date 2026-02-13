@@ -1,13 +1,19 @@
 // Stage 10: Quick Look Modal (macOS-style)
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { X, ChevronLeft, ChevronRight, ExternalLink } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { FileEntry } from '../store/fileStore';
 
+/**
+ * QuickLookModal — lightweight, cancel-safe preview overlay.
+ * Uses an internal requestId to ignore stale async responses when the user
+ * navigates quickly between files.
+ */
 interface QuickLookProps {
     isOpen: boolean;
     onClose: () => void;
-    currentFile: any;
-    allFiles: any[];
+    currentFile: FileEntry | null;
+    allFiles: FileEntry[];
 }
 
 interface FilePreview {
@@ -31,6 +37,7 @@ export const QuickLookModal = ({ isOpen, onClose, currentFile, allFiles }: Quick
     const [preview, setPreview] = useState<FilePreview | null>(null);
     const [loading, setLoading] = useState(false);
     const [currentIndex, setCurrentIndex] = useState(0);
+    const requestIdRef = useRef(0);
 
     useEffect(() => {
         if (isOpen && currentFile) {
@@ -69,7 +76,8 @@ export const QuickLookModal = ({ isOpen, onClose, currentFile, allFiles }: Quick
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isOpen, currentIndex, allFiles]);
 
-    const loadPreview = async (file: any) => {
+    const loadPreview = async (file: FileEntry | null) => {
+        const reqId = ++requestIdRef.current;
         if (!file || file.is_directory) {
             setPreview(null);
             return;
@@ -84,12 +92,15 @@ export const QuickLookModal = ({ isOpen, onClose, currentFile, allFiles }: Quick
                 fileId,
                 previewType: 'full'
             });
+
+            // Ignore stale responses
+            if (reqId !== requestIdRef.current) return;
             setPreview(result);
         } catch (error) {
             console.error('Failed to load preview:', error);
-            setPreview(null);
+            if (reqId === requestIdRef.current) setPreview(null);
         } finally {
-            setLoading(false);
+            if (reqId === requestIdRef.current) setLoading(false);
         }
     };
 

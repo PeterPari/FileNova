@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { useRuleStore, Rule } from '../store/ruleStore';
+import { useRuleStore, Rule, RuleRunResult } from '../store/ruleStore';
 import { RuleConflictModal, RuleConflict, RulePlanExecution } from './RuleConflictModal';
 import { RuleBuilder } from './RuleBuilder';
 import { RuleSuggestions } from './RuleSuggestions';
@@ -12,6 +12,12 @@ interface RuleConflictBatch {
     batch_id: string;
     conflicts: RuleConflict[];
     planned_actions: RulePlanExecution[];
+}
+
+interface RulePlanExecutionResult {
+    files_matched: number;
+    files_processed: number;
+    errors: string[];
 }
 
 export const RulesManager: React.FC = () => {
@@ -78,19 +84,19 @@ export const RulesManager: React.FC = () => {
         // Dry run first? Or just run?
         // For now, let's just run it.
         try {
-            const dryRun = await runRule(id, true);
+            const dryRun: RuleRunResult = await runRule(id, true);
             setRunStatus({
                 type: 'running',
                 message: `Processing ${dryRun.files_matched} files...`,
             });
-            const result = await runRule(id, false);
+            const result: RuleRunResult = await runRule(id, false);
             if (result.requires_resolution && result.batch_id) {
                 setRunStatus(null);
                 setPendingResolution({
                     ruleId: id,
                     batchId: result.batch_id,
-                    conflicts: result.conflicts || [],
-                    actions: result.planned_actions || [],
+                    conflicts: (result.conflicts as RuleConflict[] | undefined) || [],
+                    actions: (result.planned_actions as RulePlanExecution[] | undefined) || [],
                 });
                 return;
             }
@@ -107,7 +113,7 @@ export const RulesManager: React.FC = () => {
         if (!pendingResolution) return;
         try {
             setRunStatus({ type: 'running', message: 'Applying conflict resolutions...' });
-            const result = await invoke<any>('execute_rule_plan', {
+            const result = await invoke<RulePlanExecutionResult>('execute_rule_plan', {
                 ruleId: pendingResolution.ruleId,
                 batchId: pendingResolution.batchId,
                 actions,
@@ -131,8 +137,8 @@ export const RulesManager: React.FC = () => {
     };
 
     return (
-        <div className="flex flex-col h-full bg-gray-900 icon-white">
-            <div className="flex justify-between items-center p-4 border-b border-gray-700">
+        <div className="flex flex-col h-full bg-base icon-white">
+            <div className="flex justify-between items-center p-4 border-b border-base">
                 <h2 className="text-xl font-bold flex items-center gap-2">
                     <Settings size={24} /> Rules Engine
                 </h2>
@@ -161,26 +167,26 @@ export const RulesManager: React.FC = () => {
                 <RuleSuggestions />
 
                 {isLoading && rules.length === 0 ? (
-                    <div className="text-center text-gray-500 mt-10">Loading rules...</div>
+                    <div className="text-center text-muted mt-10">Loading rules...</div>
                 ) : rules.length === 0 ? (
-                    <div className="text-center text-gray-500 mt-10">
+                    <div className="text-center text-muted mt-10">
                         No rules defined. Create one to automate your organization.
                     </div>
                 ) : (
                     <div className="space-y-3">
                         {rules.map(rule => (
-                            <div key={rule.id} className="bg-gray-800 border border-gray-700 rounded-lg p-4 flex justify-between items-center hover:bg-gray-750 transition-colors">
+                            <div key={rule.id} className="bg-surface border border-base rounded-lg p-4 flex justify-between items-center hover:bg-surface-hover transition-colors">
                                 <div>
                                     <h3 className="font-semibold text-lg">{rule.name}</h3>
-                                    <div className="text-xs text-gray-400 mt-1 flex gap-2">
+                                    <div className="text-xs text-muted mt-1 flex gap-2">
                                         <span className={`px-1.5 py-0.5 rounded ${rule.enabled ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'}`}>
                                             {rule.enabled ? 'Enabled' : 'Disabled'}
                                         </span>
-                                        <span className="bg-gray-700/50 px-1.5 py-0.5 rounded text-gray-300">
+                                        <span className="bg-surface-hover px-1.5 py-0.5 rounded text-secondary">
                                             Trigger: {rule.trigger}
                                         </span>
                                     </div>
-                                    <div className="text-xs text-gray-500 mt-2 truncate w-96">
+                                    <div className="text-xs text-muted mt-2 truncate w-96">
                                         Condition: {rule.condition_json.substring(0, 50)}...
                                     </div>
                                 </div>
@@ -189,28 +195,28 @@ export const RulesManager: React.FC = () => {
                                     <button
                                         onClick={() => handleToggleEnabled(rule)}
                                         title={rule.enabled ? 'Disable Rule' : 'Enable Rule'}
-                                        className={`px-2 py-1 rounded text-xs border ${rule.enabled ? 'bg-green-900/30 border-green-700 text-green-300' : 'bg-gray-700 border-gray-600 text-gray-300'}`}
+                                        className={`px-2 py-1 rounded text-xs border ${rule.enabled ? 'bg-green-900/30 border-green-700 text-green-300' : 'bg-surface-hover border-base text-secondary'}`}
                                     >
                                         {rule.enabled ? 'Enabled' : 'Disabled'}
                                     </button>
                                     <button
                                         onClick={() => handleRun(rule.id)}
                                         title="Run Rule Now"
-                                        className="p-2 hover:bg-gray-700 rounded text-green-400"
+                                        className="p-2 hover:bg-surface-hover rounded text-green-400"
                                     >
                                         <Play size={18} />
                                     </button>
                                     <button
                                         onClick={() => handleEdit(rule)}
                                         title="Edit Rule"
-                                        className="p-2 hover:bg-gray-700 rounded text-blue-400"
+                                        className="p-2 hover:bg-surface-hover rounded text-blue-400"
                                     >
                                         <Edit2 size={18} />
                                     </button>
                                     <button
                                         onClick={() => handleDelete(rule.id)}
                                         title="Delete Rule"
-                                        className="p-2 hover:bg-gray-700 rounded text-red-400"
+                                        className="p-2 hover:bg-surface-hover rounded text-red-400"
                                     >
                                         <Trash2 size={18} />
                                     </button>

@@ -333,9 +333,10 @@ pub async fn chat_query(app_handle: AppHandle, index_state: State<'_, Arc<IndexM
         [session_id],
     ).map_err(|e| e.to_string())?;
 
-    // 2. Fetch API Key
-    let api_key = db::get_setting(&conn, "gemini_api_key")
-        .map_err(|e| e.to_string())?
+    // 2. Fetch API Key from secure vault first (DB fallback for migration)
+    let api_key = crate::db::get_secret("gemini_api_key")
+        .unwrap_or(None)
+        .or_else(|| db::get_setting(&conn, "gemini_api_key").ok().flatten())
         .ok_or("No Gemini API Key found. Please add it to settings.")?;
 
     // 3. Load conversation history for context awareness
@@ -390,13 +391,11 @@ pub async fn chat_query(app_handle: AppHandle, index_state: State<'_, Arc<IndexM
         }],
     };
 
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={}",
-        api_key
-    );
+    let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
 
     // 4. Call LLM
-    let res = match client.post(&url)
+    let res = match client.post(url)
+        .header("x-goog-api-key", api_key)
         .json(&request_body)
         .send()
         .await {
@@ -956,6 +955,7 @@ fn execute_analyze(parsed: &LlmResponse, conn: &Connection, analysis_data: &mut 
     let params = parsed.params.as_ref();
     let metric = params.and_then(|p| p.get("metric")).and_then(|v| v.as_str()).unwrap_or("size");
     let target_folder = params.and_then(|p| p.get("target_folder")).and_then(|v| v.as_str());
+    let folder_like = sanitize_folder_filter(target_folder);
 
     match metric {
         "trend" | "history" => {
@@ -1012,23 +1012,38 @@ fn execute_analyze(parsed: &LlmResponse, conn: &Connection, analysis_data: &mut 
                  FROM files WHERE is_deleted = 0 AND is_directory = 0"
             );
 
-            if let Some(folder) = target_folder {
-                sql.push_str(&format!(" AND path LIKE '%{}%'", folder.replace('\'', "''")));
+            if folder_like.is_some() {
+                sql.push_str(" AND path LIKE ?1 ESCAPE '\\\\'");
             }
             sql.push_str(" GROUP BY category ORDER BY total_size DESC");
 
             let stats: Vec<StatItem> = conn.prepare(&sql)
                 .and_then(|mut stmt| {
-                    let rows = stmt.query_map([], |row| {
-                        let cat: String = row.get(0)?;
-                        let count: i64 = row.get(1)?;
-                        let size: i64 = row.get(2)?;
-                        Ok(StatItem {
-                            label: cat,
-                            value: format!("{} files, {}", count, format_size(size)),
-                        })
-                    })?;
-                    Ok(rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
+                    if let Some(ref folder) = folder_like {
+                        let rows = stmt.query_map([folder], |row| {
+                            let cat: String = row.get(0)?;
+                            let count: i64 = row.get(1)?;
+                            let size: i64 = row.get(2)?;
+                            Ok(StatItem {
+                                label: cat,
+                                value: format!("{} files, {}", count, format_size(size)),
+                            })
+                        })?;
+
+                        Ok(rows.filter_map(Result::ok).collect::<Vec<_>>())
+                    } else {
+                        let rows = stmt.query_map([], |row| {
+                            let cat: String = row.get(0)?;
+                            let count: i64 = row.get(1)?;
+                            let size: i64 = row.get(2)?;
+                            Ok(StatItem {
+                                label: cat,
+                                value: format!("{} files, {}", count, format_size(size)),
+                            })
+                        })?;
+
+                        Ok(rows.filter_map(Result::ok).collect::<Vec<_>>())
+                    }
                 })
                 .unwrap_or_default();
 
@@ -1047,23 +1062,37 @@ fn execute_analyze(parsed: &LlmResponse, conn: &Connection, analysis_data: &mut 
         }
         "largest_files" => {
             let mut sql = String::from("SELECT name, path, extension, size_bytes, CAST(strftime('%s', modified_at) AS INTEGER) FROM files WHERE is_deleted = 0 AND is_directory = 0");
-            if let Some(folder) = target_folder {
-                sql.push_str(&format!(" AND path LIKE '%{}%'", folder.replace('\'', "''")));
+            if folder_like.is_some() {
+                sql.push_str(" AND path LIKE ?1 ESCAPE '\\\\'");
             }
             sql.push_str(" ORDER BY size_bytes DESC LIMIT 20");
 
             let mut file_results_local: Vec<ChatFileResult> = Vec::new();
             if let Ok(mut stmt) = conn.prepare(&sql) {
-                if let Ok(rows) = stmt.query_map([], |row| {
-                    Ok(ChatFileResult {
-                        name: row.get(0)?,
-                        path: row.get(1)?,
-                        extension: row.get(2)?,
-                        size_bytes: row.get(3)?,
-                        modified_at: row.get::<_, i64>(4).unwrap_or(0),
-                    })
-                }) {
-                    file_results_local = rows.filter_map(|r| r.ok()).collect();
+                if let Some(ref folder) = folder_like {
+                    if let Ok(rows) = stmt.query_map([folder], |row| {
+                        Ok(ChatFileResult {
+                            name: row.get(0)?,
+                            path: row.get(1)?,
+                            extension: row.get(2)?,
+                            size_bytes: row.get(3)?,
+                            modified_at: row.get::<_, i64>(4).unwrap_or(0),
+                        })
+                    }) {
+                        file_results_local = rows.filter_map(Result::ok).collect();
+                    }
+                } else {
+                    if let Ok(rows) = stmt.query_map([], |row| {
+                        Ok(ChatFileResult {
+                            name: row.get(0)?,
+                            path: row.get(1)?,
+                            extension: row.get(2)?,
+                            size_bytes: row.get(3)?,
+                            modified_at: row.get::<_, i64>(4).unwrap_or(0),
+                        })
+                    }) {
+                        file_results_local = rows.filter_map(Result::ok).collect();
+                    }
                 }
             }
 
@@ -1082,25 +1111,41 @@ fn execute_analyze(parsed: &LlmResponse, conn: &Connection, analysis_data: &mut 
         }
         "oldest_files" => {
             let mut sql = String::from("SELECT name, path, extension, size_bytes, CAST(strftime('%s', modified_at) AS INTEGER) FROM files WHERE is_deleted = 0 AND is_directory = 0");
-            if let Some(folder) = target_folder {
-                sql.push_str(&format!(" AND path LIKE '%{}%'", folder.replace('\'', "''")));
+            if folder_like.is_some() {
+                sql.push_str(" AND path LIKE ?1 ESCAPE '\\\\'");
             }
             sql.push_str(" ORDER BY modified_at ASC LIMIT 20");
 
             let mut stats = Vec::new();
             if let Ok(mut stmt) = conn.prepare(&sql) {
-                if let Ok(rows) = stmt.query_map([], |row| {
-                    let name: String = row.get(0)?;
-                    let modified: i64 = row.get::<_, i64>(4).unwrap_or(0);
-                    let date = chrono::DateTime::from_timestamp(modified, 0)
-                        .map(|dt| dt.format("%Y-%m-%d").to_string())
-                        .unwrap_or_else(|| "Unknown".to_string());
-                    Ok(StatItem {
-                        label: name,
-                        value: date,
-                    })
-                }) {
-                    stats = rows.filter_map(|r| r.ok()).collect();
+                if let Some(ref folder) = folder_like {
+                    if let Ok(rows) = stmt.query_map([folder], |row| {
+                        let name: String = row.get(0)?;
+                        let modified: i64 = row.get::<_, i64>(4).unwrap_or(0);
+                        let date = chrono::DateTime::from_timestamp(modified, 0)
+                            .map(|dt| dt.format("%Y-%m-%d").to_string())
+                            .unwrap_or_else(|| "Unknown".to_string());
+                        Ok(StatItem {
+                            label: name,
+                            value: date,
+                        })
+                    }) {
+                        stats = rows.filter_map(Result::ok).collect();
+                    }
+                } else {
+                    if let Ok(rows) = stmt.query_map([], |row| {
+                        let name: String = row.get(0)?;
+                        let modified: i64 = row.get::<_, i64>(4).unwrap_or(0);
+                        let date = chrono::DateTime::from_timestamp(modified, 0)
+                            .map(|dt| dt.format("%Y-%m-%d").to_string())
+                            .unwrap_or_else(|| "Unknown".to_string());
+                        Ok(StatItem {
+                            label: name,
+                            value: date,
+                        })
+                    }) {
+                        stats = rows.filter_map(Result::ok).collect();
+                    }
                 }
             }
 
@@ -1116,13 +1161,19 @@ fn execute_analyze(parsed: &LlmResponse, conn: &Connection, analysis_data: &mut 
         _ => {
             // Default: storage size breakdown
             let mut sql = String::from("SELECT COUNT(*) as cnt, SUM(size_bytes) as total FROM files WHERE is_deleted = 0 AND is_directory = 0");
-            if let Some(folder) = target_folder {
-                sql.push_str(&format!(" AND path LIKE '%{}%'", folder.replace('\'', "''")));
+            if folder_like.is_some() {
+                sql.push_str(" AND path LIKE ?1 ESCAPE '\\\\'");
             }
 
-            let (file_count, total_size) = conn.query_row(&sql, [], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1).unwrap_or(0)))
-            }).unwrap_or((0, 0));
+            let (file_count, total_size) = if let Some(ref folder) = folder_like {
+                conn.query_row(&sql, [folder], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1).unwrap_or(0)))
+                }).unwrap_or((0, 0))
+            } else {
+                conn.query_row(&sql, [], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1).unwrap_or(0)))
+                }).unwrap_or((0, 0))
+            };
 
             // Get folder count
             let folder_count: i64 = conn.query_row(
@@ -1146,6 +1197,21 @@ fn execute_analyze(parsed: &LlmResponse, conn: &Connection, analysis_data: &mut 
             format!("📊 {}", parsed.text_response)
         }
     }
+}
+
+// Escape and bound folder filters so path-scoped analytics remain parameterized and predictable.
+fn sanitize_folder_filter(target_folder: Option<&str>) -> Option<String> {
+    let raw = target_folder?.trim();
+    if raw.is_empty() || raw.len() > 260 {
+        return None;
+    }
+
+    let escaped = raw
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+
+    Some(format!("%{}%", escaped))
 }
 
 /// Execute compare intent — diff two folders

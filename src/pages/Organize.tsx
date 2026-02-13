@@ -1,118 +1,41 @@
-import React, { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import SuggestionCard, { Suggestion, SuggestionPlan } from '../components/Organize/SuggestionCard';
+import React from 'react';
+import SuggestionCard from '../components/Organize/SuggestionCard';
 import FolderStructureOptimizer from '../components/Organize/FolderStructureOptimizer';
 import { Toast } from '../components/Toast';
+import { useSuggestionsWorkflow } from '../hooks/useSuggestionsWorkflow';
 
 const Organize: React.FC = () => {
-    const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
-    const [loading, setLoading] = useState(false);
-    const [analyzing, setAnalyzing] = useState(false);
-    const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info'; action?: { label: string; onClick: () => void } } | null>(null);
-
-    const fetchSuggestions = async () => {
-        try {
-            setLoading(true);
-            const res = await invoke<Suggestion[]>('get_pending_suggestions');
-            setSuggestions(res);
-        } catch (error) {
-            console.error("Failed to fetch suggestions:", error);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleAnalyze = async () => {
-        try {
-            setAnalyzing(true);
-            // Wait for analysis to complete
-            await invoke('generate_suggestions');
-            // Then refresh list
-            await fetchSuggestions();
-        } catch (error) {
-            console.error("Analysis failed:", error);
-        } finally {
-            setAnalyzing(false);
-        }
-    };
-
-    const handleUndo = async (batchId: string) => {
-        try {
-            await invoke('undo_batch', { batchId });
-            setToast({ message: "Changes undone successfully.", type: 'success' });
-            fetchSuggestions(); // Refresh to potentially show suggestion again? Or just clear.
-        } catch (e) {
-            console.error("Undo failed:", e);
-            setToast({ message: "Failed to undo changes: " + e, type: 'error' });
-        }
-    };
-
-    const handleAccept = async (id: number) => {
-        try {
-            const batchId = await invoke<string>('accept_suggestion', { id });
-            // Optimistically remove
-            setSuggestions(prev => prev.filter(s => s.id !== id));
-
-            setToast({
-                message: "Suggestion applied successfully.",
-                type: 'success',
-                action: {
-                    label: "Undo",
-                    onClick: () => handleUndo(batchId)
-                }
-            });
-        } catch (e) {
-            console.error("Failed to accept suggestion:", e);
-            setToast({ message: "Failed to execute suggestion: " + e, type: 'error' });
-        }
-    };
-
-    const handleReject = async (id: number) => {
-        try {
-            await invoke('reject_suggestion', { id });
-            setSuggestions(prev => prev.filter(s => s.id !== id));
-        } catch (e) {
-            console.error("Failed to reject suggestion:", e);
-        }
-    };
-
-    const handleModify = async (id: number, updatedPlan: SuggestionPlan) => {
-        try {
-            await invoke('modify_suggestion', { id, updatedPlan: JSON.stringify(updatedPlan) });
-            // Update local state
-            setSuggestions(prev => prev.map(s =>
-                s.id === id
-                    ? { ...s, plan_json: JSON.stringify(updatedPlan), status: 'modified' }
-                    : s
-            ));
-        } catch (e) {
-            console.error("Failed to modify suggestion:", e);
-            alert("Failed to update plan: " + e);
-        }
-    };
-
-    useEffect(() => {
-        fetchSuggestions();
-    }, []);
+    const {
+        suggestions,
+        loading,
+        analyzing,
+        toast,
+        setToast,
+        handleAnalyze,
+        handleAccept,
+        handleReject,
+        handleModify,
+    } = useSuggestionsWorkflow();
 
     return (
-        <div className="h-full bg-gray-900 text-white flex flex-col p-6 overflow-hidden">
+        <div className="h-full bg-base text-primary flex flex-col p-6 overflow-hidden">
             <div className="flex justify-between items-center mb-6">
                 <div>
                     <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
                         Smart Organization
                     </h1>
-                    <p className="text-gray-400 mt-1">
+                    <p className="text-muted mt-1">
                         AI-powered suggestions to declutter and organize your files.
                     </p>
                 </div>
                 <button
                     onClick={handleAnalyze}
                     disabled={analyzing}
-                    className={`flex items-center gap-2 px-6 py-3 rounded-lg font-bold shadow-lg transition-all ${analyzing
-                        ? 'bg-gray-700 cursor-not-allowed text-gray-400'
-                        : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-blue-900/30'
+                    className={`flex items-center gap-2 px-6 py-3 rounded-lg font-bold transition-all ${analyzing
+                        ? 'bg-surface-hover cursor-not-allowed text-muted'
+                        : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white'
                         }`}
+                    style={{ boxShadow: 'var(--shadow-lg)' }}
                 >
                     {analyzing ? (
                         <>
@@ -133,13 +56,13 @@ const Organize: React.FC = () => {
             <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
                 <div className="max-w-4xl mx-auto pb-12">
                     {loading && suggestions.length === 0 ? (
-                        <div className="flex items-center justify-center h-64 text-gray-500">
+                        <div className="flex items-center justify-center h-64 text-muted">
                             Loading suggestions...
                         </div>
                     ) : suggestions.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center h-64 text-gray-500 border-2 border-dashed border-gray-800 rounded-xl mb-8">
+                        <div className="flex flex-col items-center justify-center h-64 text-muted border-2 border-dashed border-base rounded-xl mb-8">
                             <span className="text-4xl mb-4">✨</span>
-                            <h3 className="text-xl font-medium text-gray-400">All caught up!</h3>
+                            <h3 className="text-xl font-medium text-secondary">All caught up!</h3>
                             <p>No organization suggestions found. Try running an analysis.</p>
                         </div>
                     ) : (

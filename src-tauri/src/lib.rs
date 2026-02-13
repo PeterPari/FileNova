@@ -38,39 +38,36 @@ pub fn run() {
         .manage(DuplicateScanState::new())
         .manage(ExtractionState::new())
         .setup(|app| {
-            // Initialize database
             let app_handle = app.handle();
-            let app_dir = app_handle.path().app_data_dir().unwrap();
-            let db_path = app_dir.join("filenova.db");
-            let preview_db_path = app_dir.join("file_nova.db");
-            let index_path = app_dir.join("search_index");
+            let paths = db::resolve_app_paths(&app_handle)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e))?;
 
-            db::init_db(&db_path).expect("Failed to initialize database");
+            db::init_db(&paths.db_path)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to initialize database: {}", e)))?;
 
             // Initialize connection pool (r2d2)
-            let pool = db::DbPool::new(&db_path, &preview_db_path)
-                .expect("Failed to create connection pool");
+            let pool = db::DbPool::new(&paths.db_path, &paths.preview_db_path)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to create connection pool: {}", e)))?;
             app.manage(pool);
 
             // Initialize folder preferences table
-            if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+            if let Ok(conn) = rusqlite::Connection::open(&paths.db_path) {
                 folder_preferences::init_folder_preferences_table(&conn)
                     .expect("Failed to initialize folder preferences table");
             }
 
             // Create trash directory
-            let trash_dir = app_dir.join("filenova-trash");
-            std::fs::create_dir_all(&trash_dir).ok();
+            std::fs::create_dir_all(&paths.trash_dir).ok();
 
             // Cleanup old trash on startup (background thread)
             let cleanup_app = app.handle().clone();
             std::thread::spawn(move || {
-                let db_path = cleanup_app.path().app_data_dir().unwrap().join("filenova.db");
-                let retention_days = if let Ok(conn) = rusqlite::Connection::open(&db_path) {
-                     db::get_setting(&conn, "trash_retention_days")
-                        .unwrap_or(None)
-                        .and_then(|v| v.parse::<i64>().ok())
-                        .unwrap_or(30)
+                let retention_days = if let Ok(paths) = db::resolve_app_paths(&cleanup_app) {
+                    if let Ok(conn) = rusqlite::Connection::open(&paths.db_path) {
+                        db::get_setting_i64(&conn, "trash_retention_days", 30)
+                    } else {
+                        30
+                    }
                 } else {
                     30
                 };
@@ -85,12 +82,12 @@ pub fn run() {
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_secs(60 * 60 * 24));
 
-                let db_path = cleanup_loop_app.path().app_data_dir().unwrap().join("filenova.db");
-                let retention_days = if let Ok(conn) = rusqlite::Connection::open(&db_path) {
-                    db::get_setting(&conn, "trash_retention_days")
-                        .unwrap_or(None)
-                        .and_then(|v| v.parse::<i64>().ok())
-                        .unwrap_or(30)
+                let retention_days = if let Ok(paths) = db::resolve_app_paths(&cleanup_loop_app) {
+                    if let Ok(conn) = rusqlite::Connection::open(&paths.db_path) {
+                        db::get_setting_i64(&conn, "trash_retention_days", 30)
+                    } else {
+                        30
+                    }
                 } else {
                     30
                 };
@@ -102,12 +99,11 @@ pub fn run() {
 
             // Initialize Search Index
             let index_manager =
-                IndexManager::new(&index_path).expect("Failed to init search index");
+                IndexManager::new(&paths.index_path).expect("Failed to init search index");
             app.manage(Arc::new(index_manager));
 
             // Initialize Vector Store (LanceDB)
-            let vector_path = app_dir.join("vector_store");
-            let vector_path_str = vector_path.to_string_lossy().to_string();
+            let vector_path_str = paths.vector_path.to_string_lossy().to_string();
             let vector_store = tauri::async_runtime::block_on(async {
                 vector_store::VectorStore::new(&vector_path_str)
                     .await
@@ -118,7 +114,7 @@ pub fn run() {
             // Spawn initial indexing in background
             let index_manager = app.state::<Arc<IndexManager>>();
             let index_manager_clone = Arc::clone(&index_manager);
-            let db_path_clone = db_path.clone();
+            let db_path_clone = paths.db_path.clone();
 
             std::thread::spawn(move || {
                 if let Err(e) = index_manager_clone.rebuild_index(&db_path_clone) {
@@ -186,6 +182,10 @@ pub fn run() {
             commands::get_index_status,
             commands::get_app_setting,
             commands::save_app_setting,
+            commands::get_openai_api_key,
+            commands::get_gemini_api_key,
+            commands::save_openai_api_key,
+            commands::save_gemini_api_key,
             commands::search_keyword,
             commands::get_storage_breakdown,
             commands::get_largest_files,

@@ -594,7 +594,10 @@ pub fn move_file_to_trash(app: AppHandle, path: String) -> Result<(), String> {
 }
 
 fn get_trash_dir(app: &AppHandle) -> PathBuf {
-    app.path().app_data_dir().unwrap().join("filenova-trash")
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join("filenova-trash")
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 // Stage 10: Enhanced Preview Panel with Multiple Renderers
 import { useFileStore } from '../store/fileStore';
-import { 
-    FileText, Calendar, Database, Film, Music, 
+import {
+    FileText, Calendar, Database, Film, Music,
     FileArchive, X, Eye, Code, Copy, Check
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
@@ -131,10 +131,10 @@ export const EnhancedPreviewPanel = () => {
 
     if (!selectedFile) {
         return (
-            <div className="w-80 bg-gray-50 dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 p-6 flex flex-col items-center justify-center text-gray-400 relative">
+            <div className="w-80 bg-surface p-6 flex flex-col items-center justify-center text-muted relative h-full">
                 <button
                     onClick={togglePreviewPanel}
-                    className="absolute top-4 right-4 p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded"
+                    className="absolute top-4 right-4 p-1 hover:bg-surface-hover rounded transition-theme"
                     title="Close Preview Panel (Ctrl+P)"
                 >
                     <X size={20} />
@@ -147,44 +147,44 @@ export const EnhancedPreviewPanel = () => {
 
     if (selectedFile.is_directory) {
         return (
-            <aside className="w-80 bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 p-6 flex flex-col relative">
+            <aside className="w-80 bg-surface p-6 flex flex-col relative h-full">
                 <button
                     onClick={togglePreviewPanel}
-                    className="absolute top-4 right-4 p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded"
+                    className="absolute top-4 right-4 p-1 hover:bg-surface-hover rounded transition-theme"
                     title="Close Preview Panel (Ctrl+P)"
                 >
                     <X size={20} />
                 </button>
                 <div className="flex flex-col items-center mb-6">
-                    <div className="w-24 h-24 bg-blue-100 dark:bg-blue-900 rounded-lg flex items-center justify-center mb-4">
-                        <FileText size={48} className="text-blue-500" />
+                    <div className="w-24 h-24 rounded-lg flex items-center justify-center mb-4" style={{ backgroundColor: 'color-mix(in srgb, var(--accent-blue) 15%, transparent)' }}>
+                        <FileText size={48} className="text-accent-primary" />
                     </div>
-                    <h2 className="font-semibold text-lg text-center break-all">{selectedFile.name}</h2>
-                    <p className="text-sm text-gray-500 mt-1">Folder</p>
+                    <h2 className="font-semibold text-lg text-center break-all text-primary">{selectedFile.name}</h2>
+                    <p className="text-sm text-secondary mt-1">Folder</p>
                 </div>
             </aside>
         );
     }
 
     return (
-        <aside className="w-96 bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 flex flex-col h-full overflow-y-auto relative">
-            <div className="p-6 border-b border-gray-200 dark:border-gray-700">
+        <aside className="w-full bg-surface flex flex-col h-full overflow-y-auto relative">
+            <div className="p-6 border-b border-base">
                 <button
                     onClick={togglePreviewPanel}
-                    className="absolute top-4 right-4 p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded z-10"
+                    className="absolute top-4 right-4 p-1 hover:bg-surface-hover rounded z-10 transition-theme"
                     title="Close Preview Panel (Ctrl+P)"
                 >
                     <X size={20} />
                 </button>
-                <h2 className="font-semibold text-lg pr-8 break-all">{selectedFile.name}</h2>
-                <p className="text-sm text-gray-500 mt-1">
+                <h2 className="font-semibold text-lg pr-8 break-all text-primary">{selectedFile.name}</h2>
+                <p className="text-sm text-secondary mt-1">
                     {preview?.metadata.file_type.toUpperCase() || 'File'}
                 </p>
             </div>
 
             {loading ? (
                 <div className="flex-1 flex items-center justify-center">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2" style={{ borderColor: 'var(--accent-blue)' }}></div>
                 </div>
             ) : preview ? (
                 <>
@@ -194,48 +194,48 @@ export const EnhancedPreviewPanel = () => {
                     </div>
 
                     {/* Metadata Section */}
-                    <div className="border-t border-gray-200 dark:border-gray-700 p-6 space-y-4">
+                    <div className="border-t border-base p-6 space-y-4">
                         <div>
-                            <h3 className="text-xs font-semibold text-gray-400 uppercase mb-2 flex items-center gap-2">
+                            <h3 className="text-xs font-semibold text-muted uppercase mb-2 flex items-center gap-2">
                                 <Database size={12} /> Size
                             </h3>
-                            <p className="text-sm">{formatFileSize(preview.metadata.size_bytes)}</p>
+                            <p className="text-sm text-primary">{formatFileSize(preview.metadata.size_bytes)}</p>
                         </div>
 
                         {preview.metadata.dimensions && (
                             <div>
-                                <h3 className="text-xs font-semibold text-gray-400 uppercase mb-2">Dimensions</h3>
-                                <p className="text-sm">
-                                    {preview.metadata.dimensions[0]} × {preview.metadata.dimensions[1]} px
+                                <h3 className="text-xs font-semibold text-muted uppercase mb-2">Dimensions</h3>
+                                <p className="text-sm text-primary">
+                                    {preview.metadata.dimensions[0]} x {preview.metadata.dimensions[1]} px
                                 </p>
                             </div>
                         )}
 
                         {preview.metadata.duration && (
                             <div>
-                                <h3 className="text-xs font-semibold text-gray-400 uppercase mb-2">Duration</h3>
-                                <p className="text-sm">{formatDuration(preview.metadata.duration)}</p>
+                                <h3 className="text-xs font-semibold text-muted uppercase mb-2">Duration</h3>
+                                <p className="text-sm text-primary">{formatDuration(preview.metadata.duration)}</p>
                             </div>
                         )}
 
                         {preview.metadata.page_count && (
                             <div>
-                                <h3 className="text-xs font-semibold text-gray-400 uppercase mb-2">Pages</h3>
-                                <p className="text-sm">{preview.metadata.page_count}</p>
+                                <h3 className="text-xs font-semibold text-muted uppercase mb-2">Pages</h3>
+                                <p className="text-sm text-primary">{preview.metadata.page_count}</p>
                             </div>
                         )}
 
                         {preview.metadata.line_count && (
                             <div>
-                                <h3 className="text-xs font-semibold text-gray-400 uppercase mb-2">Lines</h3>
-                                <p className="text-sm">{preview.metadata.line_count.toLocaleString()}</p>
+                                <h3 className="text-xs font-semibold text-muted uppercase mb-2">Lines</h3>
+                                <p className="text-sm text-primary">{preview.metadata.line_count.toLocaleString()}</p>
                             </div>
                         )}
 
                         {preview.metadata.exif && (
                             <div>
-                                <h3 className="text-xs font-semibold text-gray-400 uppercase mb-2">EXIF Data</h3>
-                                <div className="space-y-1 text-sm">
+                                <h3 className="text-xs font-semibold text-muted uppercase mb-2">EXIF Data</h3>
+                                <div className="space-y-1 text-sm text-secondary">
                                     {preview.metadata.exif.camera_model && (
                                         <p>Camera: {preview.metadata.exif.camera_model}</p>
                                     )}
@@ -253,17 +253,17 @@ export const EnhancedPreviewPanel = () => {
                         )}
 
                         <div>
-                            <h3 className="text-xs font-semibold text-gray-400 uppercase mb-2 flex items-center gap-2">
+                            <h3 className="text-xs font-semibold text-muted uppercase mb-2 flex items-center gap-2">
                                 <Calendar size={12} /> Modified
                             </h3>
-                            <p className="text-sm">
+                            <p className="text-sm text-primary">
                                 {new Date(selectedFile.modified_at * 1000).toLocaleString()}
                             </p>
                         </div>
                     </div>
                 </>
             ) : (
-                <div className="flex-1 flex items-center justify-center text-gray-400">
+                <div className="flex-1 flex items-center justify-center text-muted">
                     <p>Preview not available</p>
                 </div>
             )}
@@ -288,7 +288,7 @@ function renderPreviewContent(
                     <img
                         src={preview.thumbnail}
                         alt="Preview"
-                        className="max-w-full h-auto rounded-lg shadow-lg"
+                        className="max-w-full h-auto rounded-lg shadow-theme-lg"
                     />
                 )}
             </div>
@@ -303,25 +303,25 @@ function renderPreviewContent(
                     <img
                         src={preview.thumbnail}
                         alt="PDF Preview"
-                        className="max-w-full h-auto rounded-lg shadow-lg border border-gray-300 dark:border-gray-600"
+                        className="max-w-full h-auto rounded-lg shadow-theme-lg border border-base"
                     />
                 ) : preview.content ? (
                     <div className="w-full">
-                        <div className="flex items-center gap-2 mb-3 text-sm text-gray-500 dark:text-gray-400">
+                        <div className="flex items-center gap-2 mb-3 text-sm text-secondary">
                             <FileText size={16} />
                             <span>PDF Text Content</span>
                             {preview.metadata.page_count && (
-                                <span className="ml-auto px-2 py-0.5 text-xs rounded bg-gray-100 dark:bg-gray-700">
+                                <span className="ml-auto px-2 py-0.5 text-xs rounded bg-surface-hover">
                                     {preview.metadata.page_count} page{preview.metadata.page_count !== 1 ? 's' : ''}
                                 </span>
                             )}
                         </div>
-                        <pre className="w-full max-h-[600px] overflow-auto p-4 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap font-sans leading-relaxed">
+                        <pre className="w-full max-h-[600px] overflow-auto p-4 bg-base border border-base rounded-lg text-sm text-primary whitespace-pre-wrap font-sans leading-relaxed">
                             {preview.content}
                         </pre>
                     </div>
                 ) : (
-                    <div className="flex flex-col items-center text-gray-400">
+                    <div className="flex flex-col items-center text-muted">
                         <FileText size={64} className="mb-4 opacity-30" />
                         <p>PDF preview not available</p>
                     </div>
@@ -344,17 +344,17 @@ function renderPreviewContent(
                     <img
                         src={preview.thumbnail}
                         alt="Video Thumbnail"
-                        className="max-w-full h-auto rounded-lg shadow-lg"
+                        className="max-w-full h-auto rounded-lg shadow-theme-lg"
                     />
                 ) : (
-                    <div className="flex flex-col items-center text-gray-400">
+                    <div className="flex flex-col items-center text-muted">
                         <Film size={64} className="mb-4 opacity-30" />
                         <p>Video preview not available</p>
                         <p className="text-xs mt-1">Install ffmpeg for video thumbnails</p>
                     </div>
                 )}
                 {/* Video metadata */}
-                <div className="flex items-center gap-4 mt-3 text-xs text-gray-500 dark:text-gray-400">
+                <div className="flex items-center gap-4 mt-3 text-xs text-secondary">
                     {preview.metadata.duration != null && (
                         <span>Duration: {fmtDuration(preview.metadata.duration)}</span>
                     )}
@@ -376,29 +376,30 @@ function renderPreviewContent(
 
         return (
             <div className="flex flex-col items-center w-full">
-                <Music size={48} className="mb-3 text-purple-400" />
+                <Music size={48} className="mb-3" style={{ color: 'var(--accent-blue)' }} />
                 {preview.metadata?.duration && (
-                    <p className="text-sm text-gray-400 mb-3">
+                    <p className="text-sm text-secondary mb-3">
                         Duration: {fmtDuration(preview.metadata.duration)}
                     </p>
                 )}
                 {preview.metadata?.waveform && preview.metadata.waveform.length > 0 ? (
                     <div className="w-full px-4">
-                        <div className="flex items-end gap-px h-24 w-full bg-gray-800/30 rounded-lg p-2">
+                        <div className="flex items-end gap-px h-24 w-full bg-surface-hover rounded-lg p-2">
                             {preview.metadata.waveform.map((amp: number, i: number) => (
                                 <div
                                     key={i}
-                                    className="flex-1 bg-purple-500 rounded-t-sm min-w-[1px] transition-all"
+                                    className="flex-1 rounded-t-sm min-w-[1px] transition-all"
                                     style={{
                                         height: `${Math.max(amp * 100, 2)}%`,
                                         opacity: 0.5 + amp * 0.5,
+                                        backgroundColor: 'var(--accent-blue)',
                                     }}
                                 />
                             ))}
                         </div>
                     </div>
                 ) : (
-                    <p className="text-xs text-gray-500">Waveform unavailable</p>
+                    <p className="text-xs text-muted">Waveform unavailable</p>
                 )}
             </div>
         );
@@ -418,10 +419,10 @@ function renderPreviewContent(
                                 <>
                                     <button
                                         onClick={() => setShowRawMode(false)}
-                                        className={`px-3 py-1 text-xs rounded ${
+                                        className={`px-3 py-1 text-xs rounded transition-theme ${
                                             !showRawMode
-                                                ? 'bg-blue-500 text-white'
-                                                : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
+                                                ? 'bg-accent-primary text-white'
+                                                : 'bg-surface-hover text-secondary'
                                         }`}
                                     >
                                         <Eye size={14} className="inline mr-1" />
@@ -429,10 +430,10 @@ function renderPreviewContent(
                                     </button>
                                     <button
                                         onClick={() => setShowRawMode(true)}
-                                        className={`px-3 py-1 text-xs rounded ${
+                                        className={`px-3 py-1 text-xs rounded transition-theme ${
                                             showRawMode
-                                                ? 'bg-blue-500 text-white'
-                                                : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
+                                                ? 'bg-accent-primary text-white'
+                                                : 'bg-surface-hover text-secondary'
                                         }`}
                                     >
                                         <Code size={14} className="inline mr-1" />
@@ -443,7 +444,7 @@ function renderPreviewContent(
                         </div>
                         <button
                             onClick={copyToClipboard}
-                            className="px-3 py-1 text-xs rounded bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600"
+                            className="px-3 py-1 text-xs rounded bg-surface-hover hover:bg-surface-active text-secondary transition-theme"
                             title="Copy to clipboard"
                         >
                             {copied ? (
@@ -461,15 +462,13 @@ function renderPreviewContent(
                     </div>
                 )}
 
-                <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 overflow-x-auto">
+                <div className="bg-surface-hover rounded-lg p-4 overflow-x-auto">
                     {isMarkdown && !showRawMode ? (
-                        // TODO: Add markdown rendering with react-markdown
-                        <div
-                            className="prose dark:prose-invert max-w-none text-sm"
-                            dangerouslySetInnerHTML={{ __html: preview.content }}
-                        />
+                        <pre className="text-xs font-mono whitespace-pre-wrap break-words text-primary">
+                            {preview.content}
+                        </pre>
                     ) : (
-                        <pre className="text-xs font-mono whitespace-pre-wrap break-words">
+                        <pre className="text-xs font-mono whitespace-pre-wrap break-words text-primary">
                             {preview.content}
                         </pre>
                     )}
@@ -491,38 +490,38 @@ function renderPreviewContent(
         return (
             <div className="flex flex-col w-full">
                 <div className="flex items-center gap-2 mb-3">
-                    <FileArchive size={24} className="text-orange-400" />
+                    <FileArchive size={24} style={{ color: 'var(--accent-yellow)' }} />
                     {preview.content && (
-                        <p className="text-xs text-gray-400">{preview.content}</p>
+                        <p className="text-xs text-secondary">{preview.content}</p>
                     )}
                 </div>
                 {entries && entries.length > 0 ? (
-                    <div className="bg-gray-800/30 rounded-lg overflow-hidden">
-                        <div className="grid grid-cols-[1fr_auto_auto] gap-x-4 px-3 py-1.5 text-xs font-medium text-gray-500 border-b border-gray-700/50">
+                    <div className="bg-surface-hover rounded-lg overflow-hidden">
+                        <div className="grid grid-cols-[1fr_auto_auto] gap-x-4 px-3 py-1.5 text-xs font-medium text-muted border-b border-base">
                             <span>Name</span>
                             <span className="text-right">Size</span>
                             <span className="text-right">Compressed</span>
                         </div>
-                        <div className="max-h-80 overflow-y-auto">
+                        <div className="max-h-80 overflow-y-auto custom-scrollbar">
                             {entries.map((entry, i) => {
                                 const depth = (entry.name.match(/\//g) || []).length - (entry.is_directory ? 1 : 0);
                                 return (
                                     <div
                                         key={i}
-                                        className="grid grid-cols-[1fr_auto_auto] gap-x-4 px-3 py-1 text-xs hover:bg-gray-700/30 border-b border-gray-800/30"
+                                        className="grid grid-cols-[1fr_auto_auto] gap-x-4 px-3 py-1 text-xs hover:bg-surface-active border-b border-base/30 transition-theme"
                                     >
                                         <span
-                                            className={`truncate ${entry.is_directory ? 'text-yellow-400' : 'text-gray-300'}`}
+                                            className={`truncate ${entry.is_directory ? 'text-yellow-400' : 'text-primary'}`}
                                             style={{ paddingLeft: `${depth * 12}px` }}
                                             title={entry.name}
                                         >
                                             {entry.is_directory ? '📁 ' : '📄 '}
                                             {entry.name.replace(/\/$/, '').split('/').pop()}
                                         </span>
-                                        <span className="text-gray-500 text-right whitespace-nowrap">
+                                        <span className="text-muted text-right whitespace-nowrap">
                                             {entry.is_directory ? '—' : fmtSize(entry.uncompressed_size)}
                                         </span>
-                                        <span className="text-gray-500 text-right whitespace-nowrap">
+                                        <span className="text-muted text-right whitespace-nowrap">
                                             {entry.is_directory ? '—' : fmtSize(entry.compressed_size)}
                                         </span>
                                     </div>
@@ -531,7 +530,7 @@ function renderPreviewContent(
                         </div>
                     </div>
                 ) : (
-                    <p className="text-xs text-gray-500">No entries found or unsupported archive format</p>
+                    <p className="text-xs text-muted">No entries found or unsupported archive format</p>
                 )}
             </div>
         );
@@ -539,7 +538,7 @@ function renderPreviewContent(
 
     // Fallback
     return (
-        <div className="flex flex-col items-center text-gray-400">
+        <div className="flex flex-col items-center text-muted">
             <FileText size={64} className="mb-4 opacity-30" />
             <p>Preview not available for this file type</p>
         </div>

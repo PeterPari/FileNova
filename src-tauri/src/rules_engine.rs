@@ -268,7 +268,10 @@ pub fn create_rule(app: AppHandle, rule: RuleConfig) -> Result<i64, String> {
 
 #[tauri::command]
 pub fn update_rule(app: AppHandle, id: i64, rule: RuleConfig) -> Result<(), String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
+    let db_path = match app.path().app_data_dir() {
+        Ok(dir) => dir.join("filenova.db"),
+        Err(_) => return Err("app data dir unavailable".to_string()),
+    };
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
     conn.execute(
@@ -291,7 +294,10 @@ pub fn update_rule(app: AppHandle, id: i64, rule: RuleConfig) -> Result<(), Stri
 
 #[tauri::command]
 pub fn delete_rule(app: AppHandle, rule_id: i64) -> Result<(), String> {
-    let db_path = app.path().app_data_dir().unwrap().join("filenova.db");
+    let db_path = match app.path().app_data_dir() {
+        Ok(dir) => dir.join("filenova.db"),
+        Err(_) => return Err("app data dir unavailable".to_string()),
+    };
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
     conn.execute("DELETE FROM rules WHERE id = ?1", [rule_id])

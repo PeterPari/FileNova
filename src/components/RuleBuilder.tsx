@@ -1,11 +1,16 @@
 import React, { useState } from 'react';
 import { DndContext, closestCenter } from '@dnd-kit/core';
+import type { DragEndEvent } from '@dnd-kit/core';
 import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { useRuleStore, Rule, Condition, Action } from '../store/ruleStore';
+import { useRuleStore, Rule, Condition, Action, RuleRunResult } from '../store/ruleStore';
 import { Plus, Trash2, Save, X, Play, AlertTriangle, CheckCircle, GripVertical } from 'lucide-react';
 
 type UiCondition = Condition & { id: string };
+
+const isConditionLike = (value: unknown): value is Condition => {
+    return typeof value === 'object' && value !== null && 'type' in value;
+};
 
 const buildConditionId = () => {
     if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -14,10 +19,14 @@ const buildConditionId = () => {
     return `cond_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 };
 
+/**
+ * Walk a Condition tree and attach a UI-stable `id` to each node.
+ * Used to enable drag/sort and local updates without mutating original model.
+ */
 const assignConditionIds = (condition: Condition): UiCondition => {
     const id = buildConditionId();
     if (condition.type === 'And' || condition.type === 'Or') {
-        const children = Array.isArray(condition.value) ? condition.value : [];
+        const children = Array.isArray(condition.value) ? (condition.value as Condition[]) : [];
         return {
             ...condition,
             id,
@@ -25,15 +34,20 @@ const assignConditionIds = (condition: Condition): UiCondition => {
         } as UiCondition;
     }
     if (condition.type === 'Not') {
-        const child = condition.value ? assignConditionIds(condition.value) : assignConditionIds({ type: 'NameMatches', value: '' });
+        const child = isConditionLike(condition.value)
+            ? assignConditionIds(condition.value)
+            : assignConditionIds({ type: 'NameMatches', value: '' });
         return { ...condition, id, value: child } as UiCondition;
     }
     return { ...condition, id } as UiCondition;
 };
 
+/**
+ * Remove UI-only IDs before serializing/persisting a Condition tree.
+ */
 const stripConditionIds = (condition: UiCondition): Condition => {
     if (condition.type === 'And' || condition.type === 'Or') {
-        const children = Array.isArray(condition.value) ? condition.value : [];
+        const children = Array.isArray(condition.value) ? (condition.value as UiCondition[]) : [];
         return {
             type: condition.type,
             value: children.map(stripConditionIds),
@@ -48,7 +62,7 @@ const stripConditionIds = (condition: UiCondition): Condition => {
     return { type: condition.type, value: condition.value } as Condition;
 };
 
-const createDefaultCondition = (type: string): UiCondition => {
+const createDefaultCondition = (type: Condition['type']): UiCondition => {
     if (type === 'And' || type === 'Or') {
         return assignConditionIds({ type, value: [] } as Condition);
     }
@@ -63,6 +77,11 @@ const createDefaultCondition = (type: string): UiCondition => {
     }
     return assignConditionIds({ type, value: '' } as Condition);
 };
+
+const parseCondition = (raw: string): Condition => JSON.parse(raw) as Condition;
+const parseAction = (raw: string): Action => JSON.parse(raw) as Action;
+const asStringValue = (value: Condition['value']) => (typeof value === 'string' ? value : '');
+const asNumberValue = (value: Condition['value']) => (typeof value === 'number' ? value : 0);
 
 const SortableConditionRow: React.FC<{
     condition: UiCondition;
@@ -79,7 +98,7 @@ const SortableConditionRow: React.FC<{
         <div ref={setNodeRef} style={style} className="flex gap-2 items-start">
             <button
                 type="button"
-                className="mt-2 text-gray-500 hover:text-gray-300"
+                className="mt-2 text-muted hover:text-secondary"
                 title="Drag to reorder"
                 {...attributes}
                 {...listeners}
@@ -103,6 +122,11 @@ const ConditionBuilder: React.FC<{
     onRemove: () => void;
     depth?: number;
 }> = ({ condition, onChange, onRemove, depth = 0 }) => {
+/**
+     * Parse a compact text matcher value into a normalized operator + text pair.
+     * Supports prefixes like `regex:`, `equals:`, `contains:`, `wildcard:` and
+     * implicit wildcard when an asterisk is present.
+     */
     const parseTextCondition = (raw?: string) => {
         const value = typeof raw === 'string' ? raw : '';
         const lower = value.toLowerCase();
@@ -136,12 +160,12 @@ const ConditionBuilder: React.FC<{
         handleValueChange(buildTextConditionValue(op, text));
     };
 
-    const handleTypeChange = (newType: string) => {
+    const handleTypeChange = (newType: Condition['type']) => {
         const updated = createDefaultCondition(newType);
         onChange({ ...updated, id: condition.id } as UiCondition);
     };
 
-    const handleValueChange = (val: any) => {
+    const handleValueChange = (val: Condition['value']) => {
         onChange({ ...condition, value: val });
     };
 
@@ -152,10 +176,10 @@ const ConditionBuilder: React.FC<{
         }
     };
 
-    const updateSubCondition = (index: number, newSub: Condition) => {
+    const updateSubCondition = (index: number, newSub: UiCondition) => {
         if (Array.isArray(condition.value)) {
             const newArr = [...condition.value];
-            newArr[index] = newSub as UiCondition;
+            newArr[index] = newSub;
             onChange({ ...condition, value: newArr });
         }
     };
@@ -168,7 +192,7 @@ const ConditionBuilder: React.FC<{
         }
     };
 
-    const handleDragEnd = (event: any) => {
+    const handleDragEnd = (event: DragEndEvent) => {
         const { active, over } = event;
         if (!active || !over || active.id === over.id) return;
 
@@ -184,12 +208,12 @@ const ConditionBuilder: React.FC<{
     };
 
     return (
-        <div className="flex flex-col gap-2 p-2 border rounded border-gray-700 bg-gray-800/50" style={{ marginLeft: depth * 10 }}>
+        <div className="flex flex-col gap-2 p-2 border rounded border-base bg-surface-hover" style={{ marginLeft: depth * 10 }}>
             <div className="flex items-center gap-2">
                 <select
                     value={condition.type}
-                    onChange={(e) => handleTypeChange(e.target.value)}
-                    className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200"
+                    onChange={(e) => handleTypeChange(e.target.value as Condition['type'])}
+                    className="bg-surface-hover border border-base rounded px-2 py-1 text-sm text-primary"
                 >
                     <option value="And">AND (All match)</option>
                     <option value="Or">OR (Any match)</option>
@@ -209,9 +233,9 @@ const ConditionBuilder: React.FC<{
                 {condition.type === 'NameMatches' && (
                     <div className="flex items-center gap-2 flex-1">
                         <select
-                            value={parseTextCondition(condition.value).op}
-                            onChange={(e) => updateTextCondition(e.target.value, parseTextCondition(condition.value).text)}
-                            className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200"
+                            value={parseTextCondition(asStringValue(condition.value)).op}
+                            onChange={(e) => updateTextCondition(e.target.value, parseTextCondition(asStringValue(condition.value)).text)}
+                            className="bg-surface-hover border border-base rounded px-2 py-1 text-sm text-primary"
                         >
                             <option value="contains">Contains</option>
                             <option value="equals">Equals</option>
@@ -220,61 +244,61 @@ const ConditionBuilder: React.FC<{
                         </select>
                         <input
                             type="text"
-                            value={parseTextCondition(condition.value).text}
-                            onChange={(e) => updateTextCondition(parseTextCondition(condition.value).op, e.target.value)}
+                            value={parseTextCondition(asStringValue(condition.value)).text}
+                            onChange={(e) => updateTextCondition(parseTextCondition(asStringValue(condition.value)).op, e.target.value)}
                             placeholder="value"
-                            className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm flex-1 text-gray-200"
+                            className="bg-surface-hover border border-base rounded px-2 py-1 text-sm flex-1 text-primary"
                         />
                     </div>
                 )}
                 {condition.type === 'ExtensionEquals' && (
                     <input
                         type="text"
-                        value={condition.value}
+                        value={asStringValue(condition.value)}
                         onChange={(e) => handleValueChange(e.target.value)}
                         placeholder="jpg"
-                        className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm flex-1 text-gray-200"
+                        className="bg-surface-hover border border-base rounded px-2 py-1 text-sm flex-1 text-primary"
                     />
                 )}
                 {(condition.type === 'SizeGreaterThan' || condition.type === 'SizeLessThan') && (
                     <div className="flex items-center gap-2 flex-1">
                         <input
                             type="number"
-                            value={condition.value}
+                            value={asNumberValue(condition.value)}
                             onChange={(e) => handleValueChange(parseInt(e.target.value))}
                             className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm w-24 text-gray-200"
                         />
-                        <span className="text-xs text-gray-400">bytes</span>
+                        <span className="text-xs text-muted">bytes</span>
                     </div>
                 )}
                 {condition.type === 'SizeEquals' && (
                     <div className="flex items-center gap-2 flex-1">
                         <input
                             type="number"
-                            value={condition.value}
+                            value={asNumberValue(condition.value)}
                             onChange={(e) => handleValueChange(parseInt(e.target.value))}
                             className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm w-24 text-gray-200"
                         />
-                        <span className="text-xs text-gray-400">bytes</span>
+                        <span className="text-xs text-muted">bytes</span>
                     </div>
                 )}
                 {(condition.type === 'ModifiedBefore' || condition.type === 'ModifiedAfter') && (
                     <div className="flex items-center gap-2 flex-1">
-                        <span className="text-xs text-gray-400">Timestamp:</span>
+                        <span className="text-xs text-muted">Timestamp:</span>
                         <input
                             type="number"
-                            value={condition.value}
+                            value={asNumberValue(condition.value)}
                             onChange={(e) => handleValueChange(parseInt(e.target.value))}
-                            className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm flex-1 text-gray-200"
+                            className="bg-surface-hover border border-base rounded px-2 py-1 text-sm flex-1 text-primary"
                         />
                     </div>
                 )}
                 {condition.type === 'PathContains' && (
                     <div className="flex items-center gap-2 flex-1">
                         <select
-                            value={parseTextCondition(condition.value).op}
-                            onChange={(e) => updateTextCondition(e.target.value, parseTextCondition(condition.value).text)}
-                            className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200"
+                            value={parseTextCondition(asStringValue(condition.value)).op}
+                            onChange={(e) => updateTextCondition(e.target.value, parseTextCondition(asStringValue(condition.value)).text)}
+                            className="bg-surface-hover border border-base rounded px-2 py-1 text-sm text-primary"
                         >
                             <option value="contains">Contains</option>
                             <option value="equals">Equals</option>
@@ -282,20 +306,20 @@ const ConditionBuilder: React.FC<{
                         </select>
                         <input
                             type="text"
-                            value={parseTextCondition(condition.value).text}
-                            onChange={(e) => updateTextCondition(parseTextCondition(condition.value).op, e.target.value)}
+                            value={parseTextCondition(asStringValue(condition.value)).text}
+                            onChange={(e) => updateTextCondition(parseTextCondition(asStringValue(condition.value)).op, e.target.value)}
                             placeholder="/images/"
-                            className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm flex-1 text-gray-200"
+                            className="bg-surface-hover border border-base rounded px-2 py-1 text-sm flex-1 text-primary"
                         />
                     </div>
                 )}
                 {condition.type === 'HasTag' && (
                     <input
                         type="text"
-                        value={condition.value}
+                        value={asStringValue(condition.value)}
                         onChange={(e) => handleValueChange(e.target.value)}
                         placeholder="Tag name"
-                        className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm flex-1 text-gray-200"
+                        className="bg-surface-hover border border-base rounded px-2 py-1 text-sm flex-1 text-primary"
                     />
                 )}
 
@@ -305,11 +329,11 @@ const ConditionBuilder: React.FC<{
             </div>
 
             {(condition.type === 'And' || condition.type === 'Or') && (
-                <div className="flex flex-col gap-2 pl-4 border-l-2 border-gray-600">
+                <div className="flex flex-col gap-2 pl-4 border-l-2 border-base">
                     {Array.isArray(condition.value) && (
                         <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
                             <SortableContext
-                                items={condition.value.map((sub: UiCondition) => sub.id)}
+                                items={(condition.value as UiCondition[]).map((sub) => sub.id)}
                                 strategy={verticalListSortingStrategy}
                             >
                                 <div className="flex flex-col gap-2">
@@ -345,15 +369,15 @@ export const RuleBuilder: React.FC<RuleBuilderProps> = ({ existingRule, onClose,
 
     const [condition, setCondition] = useState<UiCondition>(() =>
         existingRule
-            ? assignConditionIds(JSON.parse(existingRule.condition_json))
+            ? assignConditionIds(parseCondition(existingRule.condition_json))
             : assignConditionIds({ type: 'And', value: [] })
     );
 
     const [action, setAction] = useState<Action>(
-        existingRule ? JSON.parse(existingRule.action_json) : { type: 'Move', value: { destination: '' } }
+        existingRule ? parseAction(existingRule.action_json) : { type: 'Move', value: { destination: '' } }
     );
 
-    const [testResult, setTestResult] = useState<any>(null);
+    const [testResult, setTestResult] = useState<(RuleRunResult & { error?: undefined }) | { error: string } | null>(null);
 
     const handleSave = async () => {
         const ruleData = {
@@ -384,18 +408,18 @@ export const RuleBuilder: React.FC<RuleBuilderProps> = ({ existingRule, onClose,
             setTestResult(res);
         } catch (e) {
             console.error("Test failed", e);
-            setTestResult({ error: String(e) });
+            setTestResult({ error: e instanceof Error ? e.message : String(e) });
         }
     };
 
     return (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-[60]">
-            <div className="bg-gray-900 border border-gray-700 rounded-lg shadow-xl w-full max-w-4xl h-[90vh] flex flex-col">
-                <div className="p-4 border-b border-gray-700 flex justify-between items-center bg-gray-800 rounded-t-lg">
+            <div className="bg-base border border-base rounded-lg w-full max-w-4xl h-[90vh] flex flex-col" style={{ boxShadow: 'var(--shadow-xl)' }}>
+                <div className="p-4 border-b border-base flex justify-between items-center bg-surface rounded-t-lg">
                     <h2 className="text-lg font-semibold text-white">
                         {existingRule ? 'Edit Rule' : 'Create New Rule'}
                     </h2>
-                    <button onClick={onClose} className="text-gray-400 hover:text-white">
+                    <button onClick={onClose} className="text-muted hover:text-white">
                         <X size={20} />
                     </button>
                 </div>
@@ -404,18 +428,18 @@ export const RuleBuilder: React.FC<RuleBuilderProps> = ({ existingRule, onClose,
                     {/* General Settings */}
                     <div className="grid grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-xs font-medium text-gray-400 mb-1">Rule Name</label>
+                            <label className="block text-xs font-medium text-muted mb-1">Rule Name</label>
                             <input
                                 type="text"
                                 value={name} onChange={(e) => setName(e.target.value)}
-                                className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white"
+                                className="w-full bg-surface border border-base rounded p-2 text-white"
                             />
                         </div>
                         <div>
-                            <label className="block text-xs font-medium text-gray-400 mb-1">Trigger</label>
+                            <label className="block text-xs font-medium text-muted mb-1">Trigger</label>
                             <select
                                 value={trigger} onChange={(e) => setTrigger(e.target.value)}
-                                className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white"
+                                className="w-full bg-surface border border-base rounded p-2 text-white"
                             >
                                 <option value="manual">Manual Run</option>
                                 <option value="file_change">On File Change (Watcher)</option>
@@ -424,24 +448,24 @@ export const RuleBuilder: React.FC<RuleBuilderProps> = ({ existingRule, onClose,
                         </div>
                         {trigger === 'schedule' && (
                             <div>
-                                <label className="block text-xs font-medium text-gray-400 mb-1">Schedule (Cron)</label>
+                                <label className="block text-xs font-medium text-muted mb-1">Schedule (Cron)</label>
                                 <input
                                     type="text"
                                     value={scheduleCron}
                                     onChange={(e) => setScheduleCron(e.target.value)}
-                                    className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white"
+                                    className="w-full bg-surface border border-base rounded p-2 text-white"
                                     placeholder="0 0 * * * *"
                                 />
-                                <p className="text-xs text-gray-500 mt-1">Use cron format with seconds. Example: every day at 2am = 0 0 2 * * *</p>
+                                <p className="text-xs text-muted mt-1">Use cron format with seconds. Example: every day at 2am = 0 0 2 * * *</p>
                             </div>
                         )}
                         <div className="flex items-end pb-2">
-                            <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                            <label className="flex items-center gap-2 text-sm text-secondary cursor-pointer">
                                 <input
                                     type="checkbox"
                                     checked={enabled}
                                     onChange={(e) => setEnabled(e.target.checked)}
-                                    className="w-4 h-4 rounded bg-gray-700 border-gray-600"
+                                    className="w-4 h-4 rounded bg-surface-hover border-base"
                                 />
                                 Rule Enabled
                             </label>
@@ -450,8 +474,8 @@ export const RuleBuilder: React.FC<RuleBuilderProps> = ({ existingRule, onClose,
 
                     {/* Conditions */}
                     <div>
-                        <h3 className="text-sm font-semibold text-gray-300 mb-2">Conditions</h3>
-                        <div className="bg-gray-800/30 p-4 rounded border border-gray-700">
+                        <h3 className="text-sm font-semibold text-secondary mb-2">Conditions</h3>
+                        <div className="bg-surface-hover p-4 rounded border border-base">
                             <ConditionBuilder
                                 condition={condition}
                                 onChange={setCondition}
@@ -462,11 +486,11 @@ export const RuleBuilder: React.FC<RuleBuilderProps> = ({ existingRule, onClose,
 
                     {/* Actions */}
                     <div>
-                        <h3 className="text-sm font-semibold text-gray-300 mb-2">Action</h3>
-                        <div className="bg-gray-800/30 p-4 rounded border border-gray-700 flex flex-col gap-3">
+                        <h3 className="text-sm font-semibold text-secondary mb-2">Action</h3>
+                        <div className="bg-surface-hover p-4 rounded border border-base flex flex-col gap-3">
                             <select
                                 value={action.type}
-                                onChange={(e) => setAction({ type: e.target.value as any, value: {} })}
+                                onChange={(e) => setAction({ type: e.target.value as Action['type'], value: {} })}
                                 className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm w-full md:w-1/3 text-gray-200"
                             >
                                 <option value="Move">Move to...</option>
@@ -480,38 +504,38 @@ export const RuleBuilder: React.FC<RuleBuilderProps> = ({ existingRule, onClose,
 
                             {(action.type === 'Move' || action.type === 'Copy' || action.type === 'Archive') && (
                                 <div>
-                                    <label className="block text-xs text-gray-400 mb-1">Destination Path</label>
+                                    <label className="block text-xs text-muted mb-1">Destination Path</label>
                                     <input
                                         type="text"
                                         value={action.value?.destination || ''}
                                         onChange={(e) => setAction({ ...action, value: { destination: e.target.value } })}
-                                        className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200"
+                                        className="w-full bg-surface-hover border border-base rounded px-2 py-1 text-sm text-primary"
                                         placeholder={action.type === 'Archive' ? "/path/to/archive/ or /path/to/file.zip" : "/path/to/folder"}
                                     />
-                                    <p className="text-xs text-gray-500 mt-1">Supports {'{YYYY}'}, {'{MM}'} etc.</p>
+                                    <p className="text-xs text-muted mt-1">Supports {'{YYYY}'}, {'{MM}'} etc.</p>
                                 </div>
                             )}
                             {action.type === 'Rename' && (
                                 <div>
-                                    <label className="block text-xs text-gray-400 mb-1">Rename Pattern</label>
+                                    <label className="block text-xs text-muted mb-1">Rename Pattern</label>
                                     <input
                                         type="text"
                                         value={action.value?.pattern || ''}
                                         onChange={(e) => setAction({ ...action, value: { pattern: e.target.value } })}
-                                        className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200"
+                                        className="w-full bg-surface-hover border border-base rounded px-2 py-1 text-sm text-primary"
                                         placeholder="Prefix_{name}"
                                     />
-                                    <p className="text-xs text-gray-500 mt-1">Supports {'{name}'}, {'{ext}'}, {'{date}'}</p>
+                                    <p className="text-xs text-muted mt-1">Supports {'{name}'}, {'{ext}'}, {'{date}'}</p>
                                 </div>
                             )}
                             {action.type === 'AddTag' && (
                                 <div>
-                                    <label className="block text-xs text-gray-400 mb-1">Tag Name</label>
+                                    <label className="block text-xs text-muted mb-1">Tag Name</label>
                                     <input
                                         type="text"
                                         value={action.value?.tag || ''}
                                         onChange={(e) => setAction({ ...action, value: { tag: e.target.value } })}
-                                        className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200"
+                                        className="w-full bg-surface-hover border border-base rounded px-2 py-1 text-sm text-primary"
                                         placeholder="review-needed"
                                     />
                                 </div>
@@ -533,9 +557,9 @@ export const RuleBuilder: React.FC<RuleBuilderProps> = ({ existingRule, onClose,
                                         <CheckCircle size={16} />
                                         <span>Dry Run Complete</span>
                                     </div>
-                                    <div className="text-sm text-gray-300 pl-6">
-                                        <p>Files Matched: {testResult.files_matched}</p>
-                                        <p>Files Processed (Simulated): {testResult.files_processed}</p>
+                                    <div className="text-sm text-secondary pl-6">
+                                        <p>Files Matched: {'error' in testResult ? 0 : testResult.files_matched}</p>
+                                        <p>Files Processed (Simulated): {'error' in testResult ? 0 : testResult.files_processed}</p>
                                     </div>
                                 </div>
                             )}
@@ -543,20 +567,20 @@ export const RuleBuilder: React.FC<RuleBuilderProps> = ({ existingRule, onClose,
                     )}
                 </div>
 
-                <div className="p-4 border-t border-gray-700 bg-gray-800 rounded-b-lg flex justify-between">
+                <div className="p-4 border-t border-base bg-surface rounded-b-lg flex justify-between">
                     <div className="flex gap-2">
                         {existingRule && (
                             <button
                                 onClick={handleTestRun}
                                 disabled={isLoading}
-                                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded flex items-center gap-2 disabled:opacity-50"
+                                className="px-4 py-2 bg-surface-hover hover:bg-surface-active text-primary rounded flex items-center gap-2 disabled:opacity-50"
                             >
                                 <Play size={16} /> Test Rule (Dry Run)
                             </button>
                         )}
                     </div>
                     <div className="flex gap-3">
-                        <button onClick={onClose} className="px-4 py-2 text-gray-300 hover:bg-gray-700 rounded">
+                        <button onClick={onClose} className="px-4 py-2 text-secondary hover:bg-surface-hover rounded">
                             Cancel
                         </button>
                         <button

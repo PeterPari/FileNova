@@ -186,9 +186,9 @@ export const BookmarksSidebar = ({ onNavigate }: BookmarksSidebarProps) => {
     };
 
     return (
-        <div className="w-64 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col h-full overflow-y-auto">
+        <div className="w-64 bg-base border-r border-base flex flex-col h-full overflow-y-auto">
             {/* Bookmarks Section */}
-            <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+            <div className="p-4 border-b border-base">
                 <div className="flex items-center justify-between mb-3">
                     <h3 className="font-semibold text-sm flex items-center gap-2">
                         <Star size={16} className="text-yellow-500" />
@@ -196,7 +196,7 @@ export const BookmarksSidebar = ({ onNavigate }: BookmarksSidebarProps) => {
                     </h3>
                     <button
                         onClick={() => setShowAddBookmark(!showAddBookmark)}
-                        className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded"
+                        className="p-1 hover:bg-surface-hover rounded"
                         title="Add Bookmark"
                     >
                         {showAddBookmark ? <X size={14} /> : <Plus size={14} />}
@@ -204,20 +204,20 @@ export const BookmarksSidebar = ({ onNavigate }: BookmarksSidebarProps) => {
                 </div>
 
                 {showAddBookmark && (
-                    <div className="mb-3 p-2 bg-white dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700 space-y-2">
+                    <div className="mb-3 p-2 bg-base rounded border border-base space-y-2">
                         <input
                             type="text"
                             placeholder="Bookmark name"
                             value={newBookmarkName}
                             onChange={(e) => setNewBookmarkName(e.target.value)}
-                            className="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-transparent"
+                            className="w-full px-2 py-1 text-sm border border-base rounded bg-transparent"
                         />
                         <input
                             type="text"
                             placeholder="Folder path"
                             value={newBookmarkPath}
                             onChange={(e) => setNewBookmarkPath(e.target.value)}
-                            className="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-transparent"
+                            className="w-full px-2 py-1 text-sm border border-base rounded bg-transparent"
                         />
                         <button
                             onClick={addBookmark}
@@ -230,7 +230,7 @@ export const BookmarksSidebar = ({ onNavigate }: BookmarksSidebarProps) => {
 
                 <div className="space-y-1">
                     {bookmarks.length === 0 ? (
-                        <p className="text-xs text-gray-400 italic">No bookmarks yet</p>
+                        <p className="text-xs text-muted italic">No bookmarks yet</p>
                     ) : (
                         bookmarks.map((bookmark, index) => (
                             <div
@@ -244,14 +244,15 @@ export const BookmarksSidebar = ({ onNavigate }: BookmarksSidebarProps) => {
                                 onDrop={(e) => handleDrop(e, index)}
                                 className={`group flex items-center gap-1.5 px-2 py-1.5 rounded cursor-pointer transition-colors ${
                                     dragOverIndex === index && dragIndex !== index
-                                        ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-400 border-dashed'
-                                        : 'hover:bg-gray-200 dark:hover:bg-gray-800 border border-transparent'
+                                        ? 'border border-blue-400 border-dashed'
+                                        : 'hover:bg-surface-hover border border-transparent'
                                 }`}
+                                style={dragOverIndex === index && dragIndex !== index ? { backgroundColor: 'color-mix(in srgb, var(--accent-blue) 12%, transparent)' } : undefined}
                                 onClick={() => onNavigate(bookmark.path)}
                             >
                                 <GripVertical
                                     size={12}
-                                    className="text-gray-400 opacity-0 group-hover:opacity-100 flex-shrink-0 cursor-grab active:cursor-grabbing"
+                                    className="text-muted opacity-0 group-hover:opacity-100 flex-shrink-0 cursor-grab active:cursor-grabbing"
                                 />
                                 <Folder size={14} className="text-blue-500 flex-shrink-0" />
                                 <span className="text-sm flex-1 truncate">{bookmark.name}</span>
@@ -273,7 +274,7 @@ export const BookmarksSidebar = ({ onNavigate }: BookmarksSidebarProps) => {
 
             {/* Pinned Files Section */}
             {pinnedFiles.length > 0 && (
-                <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+                <div className="p-4 border-b border-base">
                     <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
                         <Pin size={16} className="text-blue-500" />
                         Pinned Files
@@ -285,14 +286,14 @@ export const BookmarksSidebar = ({ onNavigate }: BookmarksSidebarProps) => {
                             return (
                                 <div
                                     key={filePath}
-                                    className="group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-800 cursor-pointer"
+                                    className="group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-surface-hover cursor-pointer"
                                     onClick={() => onNavigate(filePath)}
                                     title={filePath}
                                 >
                                     {isDir ? (
                                         <Folder size={14} className="text-blue-500 flex-shrink-0" />
                                     ) : (
-                                        <File size={14} className="text-gray-400 flex-shrink-0" />
+                                        <File size={14} className="text-muted flex-shrink-0" />
                                     )}
                                     <span className="text-sm flex-1 truncate">{fileName}</span>
                                     <button
@@ -314,7 +315,7 @@ export const BookmarksSidebar = ({ onNavigate }: BookmarksSidebarProps) => {
 
             {/* Pinned Files Section */}
             {pinnedFiles.length > 0 && (
-                <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+                <div className="p-4 border-b border-base">
                     <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
                         <Pin size={16} className="text-blue-500" />
                         Pinned Files
@@ -326,14 +327,14 @@ export const BookmarksSidebar = ({ onNavigate }: BookmarksSidebarProps) => {
                             return (
                                 <div
                                     key={filePath}
-                                    className="group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-800 cursor-pointer"
+                                    className="group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-surface-hover cursor-pointer"
                                     onClick={() => onNavigate(filePath)}
                                     title={filePath}
                                 >
                                     {isDir ? (
                                         <Folder size={14} className="text-blue-500 flex-shrink-0" />
                                     ) : (
-                                        <File size={14} className="text-gray-400 flex-shrink-0" />
+                                        <File size={14} className="text-muted flex-shrink-0" />
                                     )}
                                     <span className="text-sm flex-1 truncate">{fileName}</span>
                                     <button
@@ -356,29 +357,29 @@ export const BookmarksSidebar = ({ onNavigate }: BookmarksSidebarProps) => {
             {/* Recent Files Section */}
             <div className="p-4">
                 <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
-                    <Clock size={16} className="text-gray-500" />
+                    <Clock size={16} className="text-muted" />
                     Recent Files
                 </h3>
                 <div className="space-y-1">
                     {recentFiles.length === 0 ? (
-                        <p className="text-xs text-gray-400 italic">No recent files</p>
+                        <p className="text-xs text-muted italic">No recent files</p>
                     ) : (
                         recentFiles.map((file) => (
                             <div
                                 key={file.path}
-                                className="group flex items-start gap-2 px-2 py-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-800 cursor-pointer"
+                                className="group flex items-start gap-2 px-2 py-1.5 rounded hover:bg-surface-hover cursor-pointer"
                                 onClick={() => onNavigate(file.path)}
                             >
                                 {file.is_directory ? (
                                     <Folder size={14} className="text-blue-500 flex-shrink-0 mt-0.5" />
                                 ) : (
                                     <div className="w-3.5 h-3.5 flex-shrink-0 mt-0.5">
-                                        <div className="w-full h-full bg-gray-300 dark:bg-gray-600 rounded" />
+                                        <div className="w-full h-full bg-surface-active rounded" />
                                     </div>
                                 )}
                                 <div className="flex-1 min-w-0">
                                     <div className="text-sm truncate">{file.name}</div>
-                                    <div className="text-xs text-gray-500 flex items-center gap-2">
+                                    <div className="text-xs text-muted flex items-center gap-2">
                                         {!file.is_directory && <span>{formatFileSize(file.size)}</span>}
                                         <span>•</span>
                                         <span>{formatRelativeTime(file.modified_at)}</span>

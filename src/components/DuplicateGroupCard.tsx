@@ -63,19 +63,19 @@ export const DuplicateGroupCard = ({ group }: { group: DuplicateGroup }) => {
     };
 
     return (
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
+        <div className="bg-base rounded-xl shadow-sm border border-base overflow-hidden">
             {/* Header */}
             <button
                 onClick={() => setExpanded(!expanded)}
-                className="w-full p-4 flex items-center gap-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors text-left"
+                className="w-full p-4 flex items-center gap-3 hover:bg-surface-hover transition-colors text-left"
             >
                 <ChevronRight
                     size={16}
-                    className={`text-gray-400 transition-transform ${expanded ? 'rotate-90' : ''}`}
+                    className={`text-muted transition-transform ${expanded ? 'rotate-90' : ''}`}
                 />
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                        <span className="font-medium text-gray-900 dark:text-gray-100 truncate">
+                        <span className="font-medium text-primary truncate">
                             {representativeName}
                         </span>
                         <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${badge.color}`}>
@@ -83,7 +83,7 @@ export const DuplicateGroupCard = ({ group }: { group: DuplicateGroup }) => {
                             {badge.label}
                         </span>
                     </div>
-                    <div className="text-xs text-gray-500 mt-1">
+                    <div className="text-xs text-muted mt-1">
                         {group.file_count} copies &middot; {formatSize(group.total_wasted_bytes)} wasted
                     </div>
                 </div>
@@ -93,7 +93,8 @@ export const DuplicateGroupCard = ({ group }: { group: DuplicateGroup }) => {
                             e.stopPropagation();
                             handleKeepNewest();
                         }}
-                        className="text-xs px-3 py-1.5 bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 rounded-md hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors whitespace-nowrap"
+                        className="text-xs px-3 py-1.5 text-accent-primary rounded-md transition-colors whitespace-nowrap"
+                        style={{ backgroundColor: 'color-mix(in srgb, var(--accent-blue) 12%, transparent)' }}
                     >
                         <Clock size={12} className="inline mr-1" />
                         Newest
@@ -109,7 +110,7 @@ export const DuplicateGroupCard = ({ group }: { group: DuplicateGroup }) => {
                                     autoSelectKeepInPath(group, parentPath);
                                     setExpanded(true);
                                 }}
-                                className="text-xs px-3 py-1.5 bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors whitespace-nowrap overflow-hidden max-w-[120px] truncate"
+                                className="text-xs px-3 py-1.5 bg-surface-hover text-secondary rounded-md hover:bg-surface-active transition-colors whitespace-nowrap overflow-hidden max-w-[120px] truncate"
                                 title={`Keep file in ${parentPath}`}
                             >
                                 Keep in {folderName}
@@ -121,8 +122,8 @@ export const DuplicateGroupCard = ({ group }: { group: DuplicateGroup }) => {
 
             {/* Expanded file list */}
             {expanded && (
-                <div className="border-t border-gray-200 dark:border-gray-700">
-                    <div className="divide-y divide-gray-100 dark:divide-gray-700">
+                <div className="border-t border-base">
+                    <div className="divide-y divide-base">
                         {group.files.map((file) => {
                             const isKept = activeKeep === file.path;
                             const isDeleting = activeDeletes.includes(file.path);

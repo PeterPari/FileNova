@@ -61,3 +61,4 @@ tauri-plugin-process = "2"
 tauri-plugin-log = "2"
 log = "0.4"
 sentry = { version = "0.34", default-features = false, features = ["backtrace", "contexts", "panic", "reqwest", "rustls"] }
+keyring = "3"

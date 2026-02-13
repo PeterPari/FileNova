@@ -125,6 +125,7 @@ interface FileStore {
 
     setCurrentPath: (path: string) => Promise<void>;
     loadFiles: (path: string) => Promise<void>;
+    loadFilesRequestSeq: number;
     setViewMode: (mode: 'grid' | 'list') => void;
     setSort: (field: 'name' | 'size' | 'date' | 'type') => void;
 
@@ -221,6 +222,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
     // Tabs
     tabs: [{ path: '', label: 'Home', history: [''], historyIndex: 0 }],
     activeTabIndex: 0,
+    loadFilesRequestSeq: 0,
 
     addTab: (path: string = '') => {
         const { tabs } = get();
@@ -361,11 +363,20 @@ export const useFileStore = create<FileStore>((set, get) => ({
 
 
     loadFiles: async (path: string) => {
-        set({ isLoading: true, error: null });
+        const requestSeq = get().loadFilesRequestSeq + 1;
+        // Race-condition guard: only the latest directory request can commit state.
+        // Without this, slower prior requests overwrite newer navigation results.
+        set({ isLoading: true, error: null, loadFilesRequestSeq: requestSeq });
         try {
             const files = await invoke<FileEntry[]>('list_directory', { path });
+            if (get().loadFilesRequestSeq !== requestSeq) {
+                return;
+            }
             try {
                 const tagsMap = await invoke<Record<string, Tag[]>>('get_tags_for_directory', { path });
+                if (get().loadFilesRequestSeq !== requestSeq) {
+                    return;
+                }
                 const filesWithTags = files.map(f => ({
                     ...f,
                     tags: tagsMap[f.name] || []
@@ -373,9 +384,15 @@ export const useFileStore = create<FileStore>((set, get) => ({
                 set({ files: filesWithTags, isLoading: false });
             } catch (tagErr) {
                 console.warn("Failed to load tags for directory:", tagErr);
+                if (get().loadFilesRequestSeq !== requestSeq) {
+                    return;
+                }
                 set({ files, isLoading: false });
             }
         } catch (err) {
+            if (get().loadFilesRequestSeq !== requestSeq) {
+                return;
+            }
             set({ error: String(err), isLoading: false });
         }
     },

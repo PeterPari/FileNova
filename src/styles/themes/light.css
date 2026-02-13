@@ -14,10 +14,10 @@
   --text-disabled: #9ca3af;
   
   /* Accent Colors (adjusted for contrast) */
-  --accent-blue: #2563eb;
-  --accent-blue-hover: #1d4ed8;
-  --accent-green: #059669;
-  --accent-green-hover: #047857;
+  --accent-blue: #0284c7;
+  --accent-blue-hover: #0369a1;
+  --accent-green: #10b981;
+  --accent-green-hover: #059669;
   --accent-red: #dc2626;
   --accent-red-hover: #b91c1c;
   --accent-yellow: #d97706;
@@ -26,7 +26,7 @@
   /* Borders */
   --border-primary: #e0e0e0;
   --border-secondary: #f0f0f0;
-  --border-focus: #2563eb;
+  --border-focus: #0284c7;
   
   /* Shadows */
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
@@ -44,10 +44,10 @@
   --syntax-operator: #0096c7;
   
   /* Status Colors */
-  --status-success: #059669;
+  --status-success: #10b981;
   --status-warning: #d97706;
   --status-error: #dc2626;
-  --status-info: #2563eb;
+  --status-info: #0284c7;
   
   /* Spacing (can be overridden by compact mode) */
   --spacing-xs: 0.25rem;

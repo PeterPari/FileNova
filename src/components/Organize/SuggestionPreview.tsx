@@ -10,8 +10,8 @@ const SuggestionPreview: React.FC<SuggestionPreviewProps> = ({ moves }) => {
     // For now, let's do a simple list with better visual cues.
 
     return (
-        <div className="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden font-mono text-xs">
-            <div className="bg-gray-800 px-4 py-2 border-b border-gray-700 flex justify-between font-bold text-gray-400">
+        <div className="bg-base rounded-lg border border-base overflow-hidden font-mono text-xs">
+            <div className="bg-surface px-4 py-2 border-b border-base flex justify-between font-bold text-muted">
                 <span>Source</span>
                 <span>Destination</span>
             </div>
@@ -25,14 +25,14 @@ const SuggestionPreview: React.FC<SuggestionPreviewProps> = ({ moves }) => {
                             const dstParent = move.new_path.replace(dstName || '', '');
 
                             return (
-                                <tr key={idx} className="border-b border-gray-800 hover:bg-gray-800 transition-colors">
-                                    <td className="p-2 border-r border-gray-800 w-1/2 align-top">
+                                <tr key={idx} className="border-b border-base hover:bg-surface transition-colors">
+                                    <td className="p-2 border-r border-base w-1/2 align-top">
                                         <div className="text-red-400 font-bold">{srcName}</div>
-                                        <div className="text-gray-600 truncate" title={srcParent}>{srcParent}</div>
+                                        <div className="text-secondary truncate" title={srcParent}>{srcParent}</div>
                                     </td>
                                     <td className="p-2 w-1/2 align-top">
                                         <div className="text-green-400 font-bold">{dstName}</div>
-                                        <div className="text-gray-500 truncate" title={dstParent}>{dstParent}</div>
+                                        <div className="text-muted truncate" title={dstParent}>{dstParent}</div>
                                         {move.reason && (
                                             <div className="text-blue-400 italic mt-1 text-[10px]">
                                                 {move.reason}
@@ -45,7 +45,7 @@ const SuggestionPreview: React.FC<SuggestionPreviewProps> = ({ moves }) => {
                     </tbody>
                 </table>
             </div>
-            <div className="bg-gray-800 px-4 py-2 text-center text-gray-500 text-xs">
+            <div className="bg-surface px-4 py-2 text-center text-muted text-xs">
                 Total {moves.length} file operations
             </div>
         </div>

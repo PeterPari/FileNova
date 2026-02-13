@@ -34,6 +34,10 @@ class Logger {
     this.minLevel = level;
   }
 
+  /**
+   * Core logger method — stores a structured log entry and writes to console in dev.
+   * Routes can be added later (Sentry, remote ingestion) without changing callers.
+   */
   private log(level: LogLevel, message: string, context?: string, data?: any): void {
     if (level < this.minLevel) {
       return;
@@ -54,24 +58,30 @@ class Logger {
       this.logs.shift();
     }
 
-    // Also log to console
+    // Structured console output (only in dev)
     const prefix = context ? `[${context}]` : '';
-    const logData = data ? [message, data] : [message];
+    const formatted = `${new Date(entry.timestamp).toISOString()} ${prefix} ${message}`;
 
-    switch (level) {
-      case LogLevel.DEBUG:
-        console.debug(prefix, ...logData);
-        break;
-      case LogLevel.INFO:
-        console.info(prefix, ...logData);
-        break;
-      case LogLevel.WARN:
-        console.warn(prefix, ...logData);
-        break;
-      case LogLevel.ERROR:
-        console.error(prefix, ...logData);
-        break;
+    if (import.meta.env && (import.meta as any).env.DEV) {
+      const logData = data ? [formatted, data] : [formatted];
+      switch (level) {
+        case LogLevel.DEBUG:
+          console.debug(...logData);
+          break;
+        case LogLevel.INFO:
+          console.info(...logData);
+          break;
+        case LogLevel.WARN:
+          console.warn(...logData);
+          break;
+        case LogLevel.ERROR:
+          console.error(...logData);
+          break;
+      }
     }
+
+    // Placeholder: hook to send logs to remote / Sentry if configured
+    // e.g. if (sentryEnabled) Sentry.captureMessage(message, { level, extra: data })
   }
 
   debug(message: string, context?: string, data?: any): void {

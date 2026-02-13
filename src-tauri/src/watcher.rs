@@ -6,6 +6,7 @@ use rusqlite::{params, OptionalExtension};
 use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -42,8 +43,16 @@ fn is_symlink(path: &Path) -> bool {
 // Suspicious activity thresholds
 const SUSPICIOUS_THRESHOLD: usize = 100;
 const SUSPICIOUS_WINDOW: Duration = Duration::from_secs(60);
+static WATCHER_RUNNING: AtomicBool = AtomicBool::new(false);
 
 pub fn start_watcher(app: AppHandle, paths: Vec<String>) {
+    // Root-cause fix: `start_indexing` can be called repeatedly, so this guard
+    // guarantees we only run one watcher loop and avoid duplicate event streams.
+    if WATCHER_RUNNING.swap(true, Ordering::SeqCst) {
+        warn!("Watcher already running; skipping duplicate startup");
+        return;
+    }
+
     thread::spawn(move || {
         let (tx, rx) = channel();
 
@@ -293,5 +302,7 @@ pub fn start_watcher(app: AppHandle, paths: Vec<String>) {
                 Err(e) => error!("Watch error: {:?}", e),
             }
         }
+
+        WATCHER_RUNNING.store(false, Ordering::SeqCst);
     });
 }
